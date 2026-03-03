@@ -1,4 +1,4 @@
-FROM ghcr.io/open-webui/open-webui:0.6.10-ollama
+FROM ghcr.io/open-webui/open-webui:0.8.8-ollama
 
 USER root
 RUN apt-get update && apt-get install -y proxychains-ng && rm -rf /var/lib/apt/lists/*
