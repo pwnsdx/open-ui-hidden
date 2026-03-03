@@ -52,6 +52,9 @@ if [[ ! -s ./data/pq_proxy_certs/key.pem || ! -s ./data/pq_proxy_certs/cert.pem 
     -subj "/CN=ci-pq-proxy"
 fi
 
+# CI runs pq-proxy as non-root nginx user; ensure mounted cert/key are readable.
+chmod 644 ./data/pq_proxy_certs/cert.pem ./data/pq_proxy_certs/key.pem
+
 if docker ps --format '{{.Names}}' | grep -qx 'pq-nginx-proxy-kyber768'; then
   echo "[smoke] reusing existing running stack"
 else
