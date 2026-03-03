@@ -92,8 +92,16 @@ setup_env_file() {
             echo_green "Generated and added ${SECRET_KEY_VAR} to ${ENV_FILE}."
         fi
 
-        if ! grep -q "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}"; then
-            printf "%s=%s\n" "${OLLAMA_BASE_URL_VAR}" "http://host.docker.internal:11434" >> "${ENV_FILE}"
+        if grep -q "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}"; then
+            local current_ollama_base_url
+            current_ollama_base_url="$(grep "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
+            if [ "${current_ollama_base_url}" = "http://host.docker.internal:11434" ]; then
+                sed -i.bak "s|^${OLLAMA_BASE_URL_VAR}=.*|${OLLAMA_BASE_URL_VAR}=http://ollama-proxy:11434|" "${ENV_FILE}"
+                rm -f "${ENV_FILE}.bak"
+                echo_green "Migrated ${OLLAMA_BASE_URL_VAR} to http://ollama-proxy:11434 in ${ENV_FILE}."
+            fi
+        else
+            printf "%s=%s\n" "${OLLAMA_BASE_URL_VAR}" "http://ollama-proxy:11434" >> "${ENV_FILE}"
             echo_green "Added ${OLLAMA_BASE_URL_VAR} to ${ENV_FILE}."
         fi
         if ! grep -q "^${WEBUI_UID_VAR}=" "${ENV_FILE}"; then
@@ -109,7 +117,7 @@ setup_env_file() {
         secret_key=$(openssl rand -hex 32)
         cat > "${ENV_FILE}" <<EOF
 ${SECRET_KEY_VAR}=${secret_key}
-${OLLAMA_BASE_URL_VAR}=http://host.docker.internal:11434
+${OLLAMA_BASE_URL_VAR}=http://ollama-proxy:11434
 ${WEBUI_UID_VAR}=${host_uid}
 ${WEBUI_GID_VAR}=${host_gid}
 EOF

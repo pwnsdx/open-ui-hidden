@@ -13,8 +13,7 @@ tcp_read_time_out 15000
 tcp_connect_time_out 8000
 
 # Bypass proxy for local networks
-# The static IP for ollama-proxy (e.g., 172.20.0.5) should fall under one of these ranges
-# or be covered by the NO_PROXY environment variable set in docker-compose.yml.
+# The internal DNS host for ollama-proxy is excluded via NO_PROXY in docker-compose.yml.
 localnet 127.0.0.0/8
 localnet 10.0.0.0/8
 localnet 172.16.0.0/12
