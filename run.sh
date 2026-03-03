@@ -4,6 +4,9 @@ set -euo pipefail # Exit on error, unset var, or pipe failure
 # --- Configuration ---
 ENV_FILE=".env"
 SECRET_KEY_VAR="WEBUI_SECRET_KEY"
+WEBUI_UID_VAR="WEBUI_UID"
+WEBUI_GID_VAR="WEBUI_GID"
+OLLAMA_BASE_URL_VAR="OLLAMA_BASE_URL"
 # Updated paths for the new data structure
 DATA_DIR="./data"
 CERT_DIR="${DATA_DIR}/pq_proxy_certs"
@@ -71,30 +74,57 @@ check_docker() {
 setup_env_file() {
     echo_yellow "Setting up WEBUI_SECRET_KEY..."
     local new_key_generated=false
+    local host_uid
+    local host_gid
+    host_uid=$(id -u)
+    host_gid=$(id -g)
+
     if [ -f "${ENV_FILE}" ]; then
         if grep -q "^${SECRET_KEY_VAR}=" "${ENV_FILE}"; then
             echo_green "${SECRET_KEY_VAR} already exists in ${ENV_FILE}. Using existing key."
-            export $(grep "^${SECRET_KEY_VAR}=" "${ENV_FILE}" | xargs)
+            export "${SECRET_KEY_VAR}=$(grep "^${SECRET_KEY_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
         else
             local secret_key
             secret_key=$(openssl rand -hex 32)
-            echo "${SECRET_KEY_VAR}=${secret_key}" >> "${ENV_FILE}"
+            printf "%s=%s\n" "${SECRET_KEY_VAR}" "${secret_key}" >> "${ENV_FILE}"
             export "${SECRET_KEY_VAR}=${secret_key}"
             new_key_generated=true
             echo_green "Generated and added ${SECRET_KEY_VAR} to ${ENV_FILE}."
         fi
+
+        if ! grep -q "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}"; then
+            printf "%s=%s\n" "${OLLAMA_BASE_URL_VAR}" "http://host.docker.internal:11434" >> "${ENV_FILE}"
+            echo_green "Added ${OLLAMA_BASE_URL_VAR} to ${ENV_FILE}."
+        fi
+        if ! grep -q "^${WEBUI_UID_VAR}=" "${ENV_FILE}"; then
+            printf "%s=%s\n" "${WEBUI_UID_VAR}" "${host_uid}" >> "${ENV_FILE}"
+            echo_green "Added ${WEBUI_UID_VAR}=${host_uid} to ${ENV_FILE}."
+        fi
+        if ! grep -q "^${WEBUI_GID_VAR}=" "${ENV_FILE}"; then
+            printf "%s=%s\n" "${WEBUI_GID_VAR}" "${host_gid}" >> "${ENV_FILE}"
+            echo_green "Added ${WEBUI_GID_VAR}=${host_gid} to ${ENV_FILE}."
+        fi
     else
         local secret_key
         secret_key=$(openssl rand -hex 32)
-        echo "${SECRET_KEY_VAR}=${secret_key}\nOLLAMA_BASE_URL=http://host.docker.internal:11434" > "${ENV_FILE}"
+        cat > "${ENV_FILE}" <<EOF
+${SECRET_KEY_VAR}=${secret_key}
+${OLLAMA_BASE_URL_VAR}=http://host.docker.internal:11434
+${WEBUI_UID_VAR}=${host_uid}
+${WEBUI_GID_VAR}=${host_gid}
+EOF
         export "${SECRET_KEY_VAR}=${secret_key}"
         new_key_generated=true
         echo_green "Generated ${SECRET_KEY_VAR} and created ${ENV_FILE}."
     fi
 
+    export "${WEBUI_UID_VAR}=$(grep "^${WEBUI_UID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
+    export "${WEBUI_GID_VAR}=$(grep "^${WEBUI_GID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
+
     if [ "${new_key_generated}" = true ]; then
         echo_yellow "Important: A new WEBUI_SECRET_KEY has been generated. If you had existing Open-WebUI data, this might affect your session/login."
     fi
+    echo_green "WebUI will run as UID:GID ${WEBUI_UID}:${WEBUI_GID}."
     echo_green "${ENV_FILE} is configured."
 }
 

@@ -50,6 +50,7 @@ services:
     build:
       context: ./docker/webui
     container_name: open-webui
+    user: "${WEBUI_UID:-1000}:${WEBUI_GID:-1000}" # Run as non-root with host-mapped UID/GID
     depends_on:
       - tor # Ensure Tor is started so the SOCKS proxy is available
       - ollama-proxy # Ensure ollama-proxy is started

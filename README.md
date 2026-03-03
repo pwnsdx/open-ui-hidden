@@ -1,10 +1,11 @@
 # Open-WebUI with Tor Hidden Service & Post-Quantum TLS (BoringSSL Edition)
 
-This project runs the Open-WebUI AI interface behind a Tor hidden service, with an additional layer of post-quantum (PQ) encryption using the **X25519Kyber768Draft00** hybrid key exchange for TLS termination. It uses Docker Compose to manage three containers:
+This project runs the Open-WebUI AI interface behind a Tor hidden service, with an additional layer of post-quantum (PQ) encryption using the **X25519Kyber768Draft00** hybrid key exchange for TLS termination. It uses Docker Compose to manage four containers:
 
-- **tor-hs**: A minimal Debian container running Tor, configured to expose the WebUI's PQ proxy via a `.onion` address on port 443 (HTTPS).
+- **tor-hs**: A minimal Alpine container running Tor, configured to expose the WebUI's PQ proxy via a `.onion` address on port 443 (HTTPS).
 - **pq-proxy**: An Nginx container built from scratch It acts as a reverse proxy, listening for HTTPS traffic from Tor, terminating TLS using **X25519Kyber768Draft00** (a hybrid scheme supported by BoringSSL and some browsers like Tor Browser), and forwards traffic to the Open-WebUI container.
-- **open-webui**: The upstream Open-WebUI container serving the AI interface internally on port 8080. Wrapped with proxychains4 so that all outbound HTTP/TCP traffic (e.g., remote LLM API calls) is routed through Tor's SOCKS proxy, ensuring end-to-end anonymity for any non-local model requests.
+- **ollama-proxy**: An internal Nginx proxy that exposes your host Ollama endpoint to Open-WebUI on a private Docker network only.
+- **open-webui**: The upstream Open-WebUI container serving the AI interface internally on port 8080. Wrapped with proxychains4 so that outbound HTTP/TCP traffic (except internal local routes such as Ollama proxy traffic) is routed through Tor's SOCKS proxy.
 
 All persistent user data (Tor keys, WebUI database/cache) and generated certificates are stored in a local `./data/` directory, organized into subdirectories.
 
@@ -55,7 +56,7 @@ This architecture aims to provide a comprehensive solution for individuals seeki
 | **Dockerized Setup**                        | Manages Tor, Nginx (PQ Proxy), and Open-WebUI in separate Docker containers for isolation and ease of deployment.                            |
 | **Anonymized Outbound Traffic**               | Routes Open-WebUI's outbound HTTP/TCP traffic (e.g., remote LLM API calls) through Tor's SOCKS proxy.                                        |
 | **Data Persistence**                        | Stores Tor keys, WebUI database/cache, and generated certificates locally in a `./data/` directory.                                          |
-| **Automated Setup Script**                  | Includes `start_project.sh` for easy setup of environment variables, certificate generation, and service startup.                            |
+| **Automated Setup Script**                  | Includes `run.sh` for easy setup of environment variables, certificate generation, and service startup.                            |
 | **Multi-User Support**                      | Leverages Open-WebUI's multi-user account features for shared access.                                                                        |
 | **Self-Hosted Control**                     | Keeps data and AI interactions on your own hardware.                                                                                         |
 | **Enhanced Confidentiality for AI Chats**   | Adds an extra layer of protection for sensitive AI conversations against future quantum decryption.                                            |
@@ -82,20 +83,20 @@ If you need to integrate proprietary LLM endpoints while preserving privacy and 
     - As of late 2023/early 2024, **Tor Browser Alpha** versions support this via a flag.
     - In Tor Browser Alpha, navigate to `about:config` and set `security.tls.enable_kyber` to `true` (this flag enables Kyber support which includes this hybrid KEM).
     - Standard Tor Browser versions may not support this yet.
-- **OpenSSL command-line tool** (standard version is fine) for generating the `WEBUI_SECRET_KEY` and for the certificate generation step if done manually (though `start_project.sh` uses a Docker image for certs).
+- **OpenSSL command-line tool** (standard version is fine) for generating the `WEBUI_SECRET_KEY` and for the certificate generation step if done manually (though `run.sh` uses a Docker image for certs).
 
 ### Quick Start
 
-This project includes a `start_project.sh` script to automate setup. Simply run:
+This project includes a `run.sh` script to automate setup. Simply run:
 ```bash
-chmod +x start_project.sh
-./start_project.sh
+chmod +x run.sh
+./run.sh
 ```
 This script will:
 1. Check for Docker.
-2. Set up the `WEBUI_SECRET_KEY` in a `.env` file (generating it if not present).
+2. Set up `WEBUI_SECRET_KEY`, `WEBUI_UID`, and `WEBUI_GID` in a `.env` file (generating missing values if needed).
 3. Generate ECDSA P-256 self-signed certificates into `./data/pq_proxy_certs/` if not already present (these are used by Nginx/BoringSSL for the TLS handshake, while X25519Kyber768Draft00 is used for the key exchange).
-4. Build (if necessary, mostly pulling the base image) and start the Docker Compose services.
+4. Build images as needed and start the Docker Compose services.
 
 Follow the on-screen instructions from the script. After it completes:
 
@@ -107,7 +108,7 @@ Follow the on-screen instructions from the script. After it completes:
 3.  Open the **`https://<your-onion-address>.onion`** URL in your X25519Kyber768Draft00-enabled Tor Browser (e.g., Tor Browser Alpha with the `security.tls.enable_kyber` flag set to `true`).
     - Note the `https://`. Your browser will likely warn about a self-signed certificate (the P-256 cert), which is expected. You'll need to accept the security exception.
 
-**Manual Steps (if not using `start_project.sh`):**
+**Manual Steps (if not using `run.sh`):**
 
 1.  Clone this repository:
     ```bash
@@ -115,9 +116,14 @@ Follow the on-screen instructions from the script. After it completes:
     git clone <repo-url> && cd <repository-name>
     ```
 
-2.  Create a `.env` file in the project root and add your `WEBUI_SECRET_KEY`:
+2.  Create a `.env` file in the project root with your runtime values:
     ```bash
-    echo "WEBUI_SECRET_KEY=$(openssl rand -hex 32)" > .env
+    cat > .env <<EOF
+    WEBUI_SECRET_KEY=$(openssl rand -hex 32)
+    OLLAMA_BASE_URL=http://host.docker.internal:11434
+    WEBUI_UID=$(id -u)
+    WEBUI_GID=$(id -g)
+    EOF
     ```
 
 3.  **Generate ECDSA P-256 self-signed certificates for the PQ Proxy:**
@@ -139,7 +145,7 @@ Follow the on-screen instructions from the script. After it completes:
     ```
     This will place `key.pem` and `cert.pem` into `./data/pq_proxy_certs/`.
 
-4.  Start the services (this will mostly pull the `denji/nginx-boringssl` base image if not present, and then apply our config):
+4.  Start the services:
     ```bash
     docker-compose up --build -d
     ```
