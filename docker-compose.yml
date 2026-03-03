@@ -13,6 +13,12 @@ services:
     volumes:
       - ./data/tor_hs_data:/var/lib/tor:rw
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/lib/tor/hs/hostname"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
     networks:
       - tor-public
       - tor-internal
@@ -37,9 +43,14 @@ services:
       - /var/log/nginx:rw,mode=1777    # Nginx log directory, world-writable
       - /var/tmp:rw,mode=1777          # General temporary files
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/run/nginx.pid && kill -0 $(cat /var/run/nginx.pid)"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     networks:
       webui-internal:
-        ipv4_address: 172.28.0.5 # Updated Static IP for ollama-proxy
       ollama-access: # Network with access to host.docker.internal
     security_opt:
       - "no-new-privileges:true"
@@ -52,14 +63,16 @@ services:
     container_name: open-webui
     user: "${WEBUI_UID:-1000}:${WEBUI_GID:-1000}" # Run as non-root with host-mapped UID/GID
     depends_on:
-      - tor # Ensure Tor is started so the SOCKS proxy is available
-      - ollama-proxy # Ensure ollama-proxy is started
+      tor:
+        condition: service_healthy # Ensure Tor SOCKS proxy is actually ready
+      ollama-proxy:
+        condition: service_healthy # Ensure the Ollama proxy is reachable
     expose:
       - "8080" # Expose port only to the internal Docker network
     environment:
-      - OLLAMA_BASE_URL=http://172.28.0.5:11434 # Use the updated static IP of the proxy
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama-proxy:11434} # Use internal DNS by default
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY} # Value loaded from .env file by docker-compose
-      - NO_PROXY=ollama-proxy,127.0.0.1,localhost,172.28.0.5 # Add updated static IP to NO_PROXY
+      - NO_PROXY=ollama-proxy,127.0.0.1,localhost # Keep local traffic out of Tor proxychains path
     read_only: true # Read-only root filesystem
     tmpfs:
       - /tmp # For any temporary files uvicorn/open-webui might need
@@ -67,6 +80,12 @@ services:
     volumes:
       - ./data/open_webui_data:/app/backend/data:rw # Writable volume for app data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 8080)); s.close()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     networks:
       - webui-internal
       - tor-internal
@@ -83,7 +102,8 @@ services:
     container_name: pq-nginx-proxy-kyber768
     user: nginx # Run as non-root
     depends_on:
-      - webui # Ensures webui is started before the proxy attempts to send traffic to it
+      webui:
+        condition: service_healthy # Start only once WebUI is actually serving
     expose:
       - "443" # Expose port only to the internal Docker network (Tor will access it)
     read_only: true # Read-only root filesystem
@@ -95,6 +115,12 @@ services:
     volumes:
       - ./data/pq_proxy_certs:/etc/nginx/ssl:ro # Read-only certs
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/run/nginx.pid && kill -0 $(cat /var/run/nginx.pid)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - tor-internal
       - webui-internal
@@ -112,8 +138,5 @@ networks:
   webui-internal:
     driver: bridge
     internal: true
-    ipam:
-      config:
-        - subnet: 172.28.0.0/24 # Updated subnet
   ollama-access:
     driver: bridge
