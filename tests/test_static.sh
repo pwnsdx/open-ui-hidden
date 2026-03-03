@@ -84,6 +84,10 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   'host\.docker\.internal:host-gateway' \
   "docker-compose.yml must map host.docker.internal to host-gateway for Linux CI"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  '"1234"[[:space:]]*# Expose OpenAI-compatible passthrough \(LM Studio\)' \
+  "ollama-proxy must expose internal port 1234 for OpenAI-compatible host backends"
 
 echo "[static] checking tor service user mapping"
 assert_contains \

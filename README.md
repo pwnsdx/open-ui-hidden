@@ -176,6 +176,15 @@ Common lifecycle commands:
 ./run.sh fresh --force
 ```
 
+### LM Studio (OpenAI API) in This Stack
+
+If you run LM Studio on the Docker host (`http://localhost:1234/v1`), configure Open WebUI's **OpenAI API connection** with:
+
+- Base URL: `http://ollama-proxy:1234/v1`
+- API Key: any non-empty value (for example `lm-studio`), unless your LM Studio setup enforces one
+
+In this repository, `ollama-proxy` exposes an internal `1234` passthrough to `host.docker.internal:1234`, so you should use `ollama-proxy` from inside Open WebUI instead of `host.docker.internal` directly.
+
 ### Self-Signed TLS on Onion (Expected)
 
 - On a `.onion` service, endpoint authenticity primarily comes from the onion address itself (derived from the hidden service key).

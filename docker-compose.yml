@@ -36,6 +36,7 @@ services:
     user: nginx # Run as non-root (nginx user from base image)
     expose:
       - "11434" # Expose port to webui-internal network
+      - "1234" # Expose OpenAI-compatible passthrough (LM Studio)
     read_only: true # Read-only root filesystem
     tmpfs:
       - /var/cache/nginx:rw,mode=1777  # Nginx cache, world-writable
