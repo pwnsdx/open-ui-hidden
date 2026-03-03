@@ -9,6 +9,35 @@ This project runs the Open-WebUI AI interface behind a Tor hidden service, with 
 
 All persistent user data (Tor keys, WebUI database/cache) and generated certificates are stored in a local `./data/` directory, organized into subdirectories.
 
+### TL;DR
+
+- You get a self-hosted Open-WebUI reachable over a Tor `.onion` address.
+- TLS is terminated on an internal PQ-capable Nginx proxy (`X25519Kyber768Draft00`, experimental).
+- WebUI outbound traffic is routed through Tor via proxychains, while local Ollama traffic stays on Docker-internal DNS (`ollama-proxy`).
+- Containers are isolated, non-root where possible, and now include healthchecks for better startup reliability.
+
+### Threat Model (Practical)
+
+| Goal | Covered? | Notes |
+| :--- | :--- | :--- |
+| Hide service location from direct internet scans | Yes | Exposed only as Tor hidden service. |
+| Reduce metadata leakage for outbound model calls | Yes (partial) | Proxychains routes outbound TCP via Tor; local/internal destinations are exempted. |
+| Add an additional PQ-hybrid TLS layer | Yes (experimental) | Uses `X25519Kyber768Draft00`; browser/server support may vary. |
+| Defend against host compromise | No | If host is compromised, container isolation is not enough. |
+| Defend against malicious browser endpoint | Partial | TLS/Tor help in transit, but endpoint compromise remains out of scope. |
+
+### Architecture
+
+```mermaid
+flowchart LR
+    A["Tor Browser"] -->|"HTTPS over .onion"| B["tor-hs container"]
+    B -->|"443/tcp internal"| C["pq-proxy (Nginx + BoringSSL)"]
+    C -->|"HTTP 8080 internal"| D["open-webui"]
+    D -->|"HTTP 11434 internal DNS"| E["ollama-proxy"]
+    E -->|"host.docker.internal:11434"| F["Host Ollama"]
+    D -->|"SOCKS5 9050"| B
+```
+
 ### Why Post-Quantum TLS for your Open-WebUI Onion Service?
 
 This project implements an additional layer of Post-Quantum (PQ) TLS using X25519Kyber768Draft00 on top of Tor's existing protections. The primary motivation is to ensure **forward secrecy against future quantum adversaries.**
@@ -57,6 +86,7 @@ This architecture aims to provide a comprehensive solution for individuals seeki
 | **Anonymized Outbound Traffic**               | Routes Open-WebUI's outbound HTTP/TCP traffic (e.g., remote LLM API calls) through Tor's SOCKS proxy.                                        |
 | **Data Persistence**                        | Stores Tor keys, WebUI database/cache, and generated certificates locally in a `./data/` directory.                                          |
 | **Automated Setup Script**                  | Includes `run.sh` for easy setup of environment variables, certificate generation, and service startup.                            |
+| **Healthchecked Startup**                   | Uses container healthchecks and `depends_on` healthy conditions to reduce race conditions at boot.                                         |
 | **Multi-User Support**                      | Leverages Open-WebUI's multi-user account features for shared access.                                                                        |
 | **Self-Hosted Control**                     | Keeps data and AI interactions on your own hardware.                                                                                         |
 | **Enhanced Confidentiality for AI Chats**   | Adds an extra layer of protection for sensitive AI conversations against future quantum decryption.                                            |
@@ -95,6 +125,7 @@ chmod +x run.sh
 This script will:
 1. Check for Docker.
 2. Set up `WEBUI_SECRET_KEY`, `WEBUI_UID`, and `WEBUI_GID` in a `.env` file (generating missing values if needed).
+   - If an older `.env` uses `OLLAMA_BASE_URL=http://host.docker.internal:11434`, the script migrates it to `http://ollama-proxy:11434`.
 3. Generate ECDSA P-256 self-signed certificates into `./data/pq_proxy_certs/` if not already present (these are used by Nginx/BoringSSL for the TLS handshake, while X25519Kyber768Draft00 is used for the key exchange).
 4. Build images as needed and start the Docker Compose services.
 
@@ -108,6 +139,31 @@ Follow the on-screen instructions from the script. After it completes:
 3.  Open the **`https://<your-onion-address>.onion`** URL in your X25519Kyber768Draft00-enabled Tor Browser (e.g., Tor Browser Alpha with the `security.tls.enable_kyber` flag set to `true`).
     - Note the `https://`. Your browser will likely warn about a self-signed certificate (the P-256 cert), which is expected. You'll need to accept the security exception.
 
+### Verification Checklist
+
+After startup, run these checks:
+
+```bash
+# 1) Containers should be Up and healthy
+docker compose ps
+
+# 2) Hidden service hostname must exist
+docker compose exec tor ls -l /var/lib/tor/hs/hostname
+
+# 3) Proxy config and PID should be valid
+docker compose exec pq-proxy nginx -t
+
+# 4) WebUI should expose the expected local model endpoint
+docker compose exec webui sh -lc 'echo "$OLLAMA_BASE_URL"'
+```
+
+### Known Limitations
+
+- `X25519Kyber768Draft00` is experimental and may break with browser/server updates.
+- This setup does not replace endpoint security (host or browser compromise remains critical).
+- Tor adds latency and can affect UX for streaming/model responses.
+- TLS certificate is self-signed by default, so client trust prompts are expected.
+
 **Manual Steps (if not using `run.sh`):**
 
 1.  Clone this repository:
@@ -120,7 +176,7 @@ Follow the on-screen instructions from the script. After it completes:
     ```bash
     cat > .env <<EOF
     WEBUI_SECRET_KEY=$(openssl rand -hex 32)
-    OLLAMA_BASE_URL=http://host.docker.internal:11434
+    OLLAMA_BASE_URL=http://ollama-proxy:11434
     WEBUI_UID=$(id -u)
     WEBUI_GID=$(id -g)
     EOF
