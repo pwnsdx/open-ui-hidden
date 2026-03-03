@@ -75,6 +75,7 @@ wait_health() {
     if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
       echo "[smoke] ${container} entered terminal state: ${status}" >&2
       docker ps -a --filter "name=$container" || true
+      docker logs --tail=200 "$container" || true
       return 1
     fi
     sleep 3
@@ -83,6 +84,7 @@ wait_health() {
 
   echo "[smoke] ${container} health timeout. Current status: ${status:-unknown}" >&2
   docker ps -a --filter "name=$container" || true
+  docker logs --tail=200 "$container" || true
   return 1
 }
 

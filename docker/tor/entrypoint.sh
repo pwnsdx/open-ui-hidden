@@ -26,11 +26,23 @@ fi
 
 # Wait for pq-proxy DNS entry before launching Tor. Tor validates
 # HiddenServicePort target syntax at startup and fails if hostname is unresolved.
-echo "Waiting for pq-proxy hostname resolution before launching Tor..."
-while ! getent hosts pq-proxy > /dev/null; do
+WAIT_HOST="${TOR_UPSTREAM_HOST:-pq-proxy}"
+WAIT_TIMEOUT_SEC="${TOR_DNS_WAIT_TIMEOUT_SEC:-300}"
+ELAPSED_SEC=0
+
+echo "Waiting for ${WAIT_HOST} hostname resolution before launching Tor (timeout: ${WAIT_TIMEOUT_SEC}s)..."
+while ! getent hosts "$WAIT_HOST" > /dev/null 2>&1; do
+    if [ "$ELAPSED_SEC" -ge "$WAIT_TIMEOUT_SEC" ]; then
+        echo "Warning: timed out waiting for ${WAIT_HOST} DNS resolution; starting Tor anyway."
+        break
+    fi
     sleep 1
+    ELAPSED_SEC=$((ELAPSED_SEC + 1))
 done
-echo "pq-proxy resolved, starting Tor."
+
+if getent hosts "$WAIT_HOST" > /dev/null 2>&1; then
+    echo "${WAIT_HOST} resolved, starting Tor."
+fi
 
 # Execute the CMD (tor -f /etc/tor/torrc)
 exec "$@" 

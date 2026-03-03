@@ -124,8 +124,10 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - tor-internal
-      - webui-internal
+      tor-internal:
+        aliases:
+          - pq-proxy # Ensure Tor can always resolve the HiddenServicePort upstream name.
+      webui-internal:
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

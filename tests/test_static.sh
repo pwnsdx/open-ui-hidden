@@ -87,7 +87,11 @@ assert_contains \
 echo "[static] checking tor entrypoint waits for pq-proxy DNS"
 assert_contains \
   "$ROOT_DIR/docker/tor/entrypoint.sh" \
-  'getent[[:space:]]+hosts[[:space:]]+pq-proxy' \
+  'WAIT_HOST="\$\{TOR_UPSTREAM_HOST:-pq-proxy\}"' \
+  "tor entrypoint must default DNS wait target to pq-proxy"
+assert_contains \
+  "$ROOT_DIR/docker/tor/entrypoint.sh" \
+  'getent[[:space:]]+hosts[[:space:]]+"\$WAIT_HOST"' \
   "tor entrypoint must wait for pq-proxy DNS before launching tor"
 
 echo "[static] checking webui/tor dependency does not deadlock startup"
