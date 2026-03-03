@@ -88,6 +88,10 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   '"1234"[[:space:]]*# Expose OpenAI-compatible passthrough \(LM Studio\)' \
   "ollama-proxy must expose internal port 1234 for OpenAI-compatible host backends"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  '/app/backend/open_webui/static:rw,mode=1777' \
+  "webui static tmpfs must be world-writable so runtime assets can be created"
 
 echo "[static] checking tor service user mapping"
 assert_contains \

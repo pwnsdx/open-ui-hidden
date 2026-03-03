@@ -79,7 +79,7 @@ services:
     read_only: true # Read-only root filesystem
     tmpfs:
       - /tmp # For any temporary files uvicorn/open-webui might need
-      - /app/backend/open_webui/static # For static assets Open-WebUI might try to write/create
+      - /app/backend/open_webui/static:rw,mode=1777 # Writable static dir for runtime asset init
     volumes:
       - ./data/open_webui_data:/app/backend/data:rw # Writable volume for app data
     restart: unless-stopped
