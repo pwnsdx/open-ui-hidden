@@ -39,7 +39,19 @@ ENV BORINGSSL_GIT_URL=https://boringssl.googlesource.com/boringssl \
     BORINGSSL_COMMIT=d0fcf49574b06de7090cba4ad8124df638a0134e
 
 # Clone and build BoringSSL with security hardening flags
-RUN git clone $BORINGSSL_GIT_URL /usr/src/boringssl \
+# Retries handle transient upstream/network failures in CI.
+RUN set -eux; \
+		for attempt in 1 2 3 4 5; do \
+			rm -rf /usr/src/boringssl; \
+			if git clone "$BORINGSSL_GIT_URL" /usr/src/boringssl; then \
+				break; \
+			fi; \
+			if [ "$attempt" -eq 5 ]; then \
+				echo "error: failed to clone BoringSSL after ${attempt} attempts" >&2; \
+				exit 1; \
+			fi; \
+			sleep $((attempt * 3)); \
+		done \
 		&& cd /usr/src/boringssl \
 		&& git checkout --force --quiet $BORINGSSL_COMMIT \
 		&& mkdir -p /usr/src/boringssl/build \
@@ -135,9 +147,22 @@ RUN GNUPGHOME="$(mktemp -d)" \
 	&& rm -rf "$GNUPGHOME" nginx-$NGINX_VERSION.tar.gz.asc
 
 # Clone Brotli compression module for Nginx
-RUN git clone --depth=1 --recurse-submodules $NGINX_BROTLI_GIT_URL /usr/src/ngx_brotli \
+# Retries handle transient GitHub 5xx/network failures in CI.
+RUN set -eux; \
+		for attempt in 1 2 3 4 5; do \
+			rm -rf /usr/src/ngx_brotli; \
+			if git clone "$NGINX_BROTLI_GIT_URL" /usr/src/ngx_brotli; then \
+				break; \
+			fi; \
+			if [ "$attempt" -eq 5 ]; then \
+				echo "error: failed to clone ngx_brotli after ${attempt} attempts" >&2; \
+				exit 1; \
+			fi; \
+			sleep $((attempt * 3)); \
+		done \
 	&& cd /usr/src/ngx_brotli \
-	&& git checkout --force --quiet $NGINX_BROTLI_COMMIT
+	&& git checkout --force --quiet $NGINX_BROTLI_COMMIT \
+	&& git submodule update --init --recursive --depth=1
 
 # Build and install optimized release version of Nginx with security hardening
 RUN cd /usr/src/nginx-$NGINX_VERSION \
