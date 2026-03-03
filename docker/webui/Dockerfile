@@ -1,7 +1,7 @@
 FROM ghcr.io/open-webui/open-webui:0.8.8-ollama
 
 USER root
-RUN apt-get update && apt-get install -y proxychains-ng && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y proxychains-ng socat && rm -rf /var/lib/apt/lists/*
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

@@ -52,6 +52,8 @@ services:
       start_period: 15s
     networks:
       webui-internal:
+        aliases:
+          - ollama-upstream # Dedicated DNS alias for local webui loopback forwarders
       ollama-access: # Network with access to host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -92,6 +94,8 @@ services:
     networks:
       - webui-internal
       - tor-internal
+    extra_hosts:
+      - "ollama-proxy:127.0.0.1" # Force local loopback endpoint inside webui (forwarded to ollama-upstream)
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

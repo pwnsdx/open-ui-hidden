@@ -92,6 +92,14 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   '/app/backend/open_webui/static:rw,mode=1777' \
   "webui static tmpfs must be world-writable so runtime assets can be created"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'ollama-proxy:127\.0\.0\.1' \
+  "webui must map ollama-proxy to loopback for proxychains-safe local calls"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'ollama-upstream' \
+  "ollama-proxy service should expose a dedicated upstream alias for webui loopback forwarding"
 
 echo "[static] checking tor service user mapping"
 assert_contains \
