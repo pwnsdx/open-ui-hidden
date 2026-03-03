@@ -78,4 +78,10 @@ assert_contains \
   'host\.docker\.internal:host-gateway' \
   "docker-compose.yml must map host.docker.internal to host-gateway for Linux CI"
 
+echo "[static] checking tor service user mapping"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'user:[[:space:]]*"\$\{TOR_UID:-1000\}:\$\{TOR_GID:-1000\}"' \
+  "tor service must run with host-mapped UID/GID"
+
 echo "[static] all checks passed"

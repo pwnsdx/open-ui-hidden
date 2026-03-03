@@ -28,11 +28,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
 cat >"$ENV_FILE" <<EOF
 WEBUI_SECRET_KEY=ci_secret_key_for_tests_only
 OLLAMA_BASE_URL=http://ollama-proxy:11434
-WEBUI_UID=1000
-WEBUI_GID=1000
+WEBUI_UID=${HOST_UID}
+WEBUI_GID=${HOST_GID}
+TOR_UID=${HOST_UID}
+TOR_GID=${HOST_GID}
 EOF
 
 mkdir -p ./data/pq_proxy_certs ./data/tor_hs_data/hs ./data/open_webui_data

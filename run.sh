@@ -6,6 +6,8 @@ ENV_FILE=".env"
 SECRET_KEY_VAR="WEBUI_SECRET_KEY"
 WEBUI_UID_VAR="WEBUI_UID"
 WEBUI_GID_VAR="WEBUI_GID"
+TOR_UID_VAR="TOR_UID"
+TOR_GID_VAR="TOR_GID"
 OLLAMA_BASE_URL_VAR="OLLAMA_BASE_URL"
 # Updated paths for the new data structure
 DATA_DIR="./data"
@@ -112,6 +114,14 @@ setup_env_file() {
             printf "%s=%s\n" "${WEBUI_GID_VAR}" "${host_gid}" >> "${ENV_FILE}"
             echo_green "Added ${WEBUI_GID_VAR}=${host_gid} to ${ENV_FILE}."
         fi
+        if ! grep -q "^${TOR_UID_VAR}=" "${ENV_FILE}"; then
+            printf "%s=%s\n" "${TOR_UID_VAR}" "${host_uid}" >> "${ENV_FILE}"
+            echo_green "Added ${TOR_UID_VAR}=${host_uid} to ${ENV_FILE}."
+        fi
+        if ! grep -q "^${TOR_GID_VAR}=" "${ENV_FILE}"; then
+            printf "%s=%s\n" "${TOR_GID_VAR}" "${host_gid}" >> "${ENV_FILE}"
+            echo_green "Added ${TOR_GID_VAR}=${host_gid} to ${ENV_FILE}."
+        fi
     else
         local secret_key
         secret_key=$(openssl rand -hex 32)
@@ -120,6 +130,8 @@ ${SECRET_KEY_VAR}=${secret_key}
 ${OLLAMA_BASE_URL_VAR}=http://ollama-proxy:11434
 ${WEBUI_UID_VAR}=${host_uid}
 ${WEBUI_GID_VAR}=${host_gid}
+${TOR_UID_VAR}=${host_uid}
+${TOR_GID_VAR}=${host_gid}
 EOF
         export "${SECRET_KEY_VAR}=${secret_key}"
         new_key_generated=true
@@ -128,11 +140,14 @@ EOF
 
     export "${WEBUI_UID_VAR}=$(grep "^${WEBUI_UID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
     export "${WEBUI_GID_VAR}=$(grep "^${WEBUI_GID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
+    export "${TOR_UID_VAR}=$(grep "^${TOR_UID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
+    export "${TOR_GID_VAR}=$(grep "^${TOR_GID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
 
     if [ "${new_key_generated}" = true ]; then
         echo_yellow "Important: A new WEBUI_SECRET_KEY has been generated. If you had existing Open-WebUI data, this might affect your session/login."
     fi
     echo_green "WebUI will run as UID:GID ${WEBUI_UID}:${WEBUI_GID}."
+    echo_green "Tor will run as UID:GID ${TOR_UID}:${TOR_GID}."
     echo_green "${ENV_FILE} is configured."
 }
 

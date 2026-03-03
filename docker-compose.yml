@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: custom-tor-hs-alpine:latest
     container_name: tor-hs-alpine
-    user: toruser # Run as non-root
+    user: "${TOR_UID:-1000}:${TOR_GID:-1000}" # Run as non-root with host-mapped UID/GID
     read_only: true # Read-only root filesystem
     tmpfs:
       - /run
