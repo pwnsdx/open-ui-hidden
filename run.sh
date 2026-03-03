@@ -1,262 +1,501 @@
-#!/bin/bash
-set -euo pipefail # Exit on error, unset var, or pipe failure
+#!/usr/bin/env bash
+set -euo pipefail
 
-# --- Configuration ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 ENV_FILE=".env"
+DATA_DIR="./data"
+CERT_DIR="${DATA_DIR}/pq_proxy_certs"
+TOR_HS_DIR="${DATA_DIR}/tor_hs_data/hs"
+OPENWEBUI_DATA_DIR="${DATA_DIR}/open_webui_data"
+CERT_KEY_FILE="${CERT_DIR}/key.pem"
+CERT_PEM_FILE="${CERT_DIR}/cert.pem"
+
 SECRET_KEY_VAR="WEBUI_SECRET_KEY"
 WEBUI_UID_VAR="WEBUI_UID"
 WEBUI_GID_VAR="WEBUI_GID"
 TOR_UID_VAR="TOR_UID"
 TOR_GID_VAR="TOR_GID"
 OLLAMA_BASE_URL_VAR="OLLAMA_BASE_URL"
-# Updated paths for the new data structure
-DATA_DIR="./data"
-CERT_DIR="${DATA_DIR}/pq_proxy_certs"
-TOR_HS_DIR="${DATA_DIR}/tor_hs_data/hs"
-CERT_KEY_FILE="${CERT_DIR}/key.pem"
-CERT_PEM_FILE="${CERT_DIR}/cert.pem"
 
-# Docker Compose command detection
-DOCKER_COMPOSE_CMD="docker-compose"
+DEFAULT_OLLAMA_BASE_URL="http://ollama-proxy:11434"
+LEGACY_OLLAMA_BASE_URL="http://host.docker.internal:11434"
+CERT_TOOL_IMAGE_TAG="alpine:3.23.3"
+CERT_TOOL_IMAGE_DIGEST="alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
 
-# --- Helper Functions ---
-echo_green() {
-    echo -e "\033[0;32m${1}\033[0m"
-}
-
-echo_yellow() {
-    echo -e "\033[0;33m${1}\033[0m"
-}
-
-echo_red() {
-    echo -e "\033[0;31m${1}\033[0m"
-}
-
-# --- Cleanup Function ---
-cleanup() {
-    echo_yellow "\nPerforming cleanup... stopping Docker containers."
-    if ! ${DOCKER_COMPOSE_CMD} down; then
-        echo_red "Warning: Docker Compose down command failed. You may need to stop containers manually."
-    else
-        echo_green "Docker containers stopped successfully."
-    fi
-    echo_green "Exiting."
-}
-
-# Trap SIGINT (Ctrl+C) and EXIT signals to run the cleanup function
-trap cleanup SIGINT EXIT
-
-# 1. Check for Docker and Docker Compose
-check_docker() {
-    echo_yellow "Checking Docker installation and status..."
-    if ! command -v docker &> /dev/null; then
-        echo_red "Error: Docker CLI not found. Please install Docker."
-        exit 1
-    fi
-    if ! docker info &> /dev/null; then # docker info is more reliable than docker ps for daemon status
-        echo_red "Error: Docker daemon is not running or not responding. Please start Docker."
-        exit 1
-    fi
-    echo_green "Docker is installed and running."
-
-    echo_yellow "Detecting Docker Compose command..."
-    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-        DOCKER_COMPOSE_CMD="docker compose"
-        echo_green "Using 'docker compose'."
-    elif command -v docker-compose &> /dev/null; then
-        DOCKER_COMPOSE_CMD="docker-compose"
-        echo_green "Using 'docker-compose'."
-    else
-        echo_red "Error: Neither 'docker compose' nor 'docker-compose' found. Please install Docker Compose."
-        exit 1
-    fi
-}
-
-# 2. Set up WEBUI_SECRET_KEY in .env file
-setup_env_file() {
-    echo_yellow "Setting up WEBUI_SECRET_KEY..."
-    local new_key_generated=false
-    local host_uid
-    local host_gid
-    host_uid=$(id -u)
-    host_gid=$(id -g)
-
-    if [ -f "${ENV_FILE}" ]; then
-        if grep -q "^${SECRET_KEY_VAR}=" "${ENV_FILE}"; then
-            echo_green "${SECRET_KEY_VAR} already exists in ${ENV_FILE}. Using existing key."
-            export "${SECRET_KEY_VAR}=$(grep "^${SECRET_KEY_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-        else
-            local secret_key
-            secret_key=$(openssl rand -hex 32)
-            printf "%s=%s\n" "${SECRET_KEY_VAR}" "${secret_key}" >> "${ENV_FILE}"
-            export "${SECRET_KEY_VAR}=${secret_key}"
-            new_key_generated=true
-            echo_green "Generated and added ${SECRET_KEY_VAR} to ${ENV_FILE}."
-        fi
-
-        if grep -q "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}"; then
-            local current_ollama_base_url
-            current_ollama_base_url="$(grep "^${OLLAMA_BASE_URL_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-            if [ "${current_ollama_base_url}" = "http://host.docker.internal:11434" ]; then
-                sed -i.bak "s|^${OLLAMA_BASE_URL_VAR}=.*|${OLLAMA_BASE_URL_VAR}=http://ollama-proxy:11434|" "${ENV_FILE}"
-                rm -f "${ENV_FILE}.bak"
-                echo_green "Migrated ${OLLAMA_BASE_URL_VAR} to http://ollama-proxy:11434 in ${ENV_FILE}."
-            fi
-        else
-            printf "%s=%s\n" "${OLLAMA_BASE_URL_VAR}" "http://ollama-proxy:11434" >> "${ENV_FILE}"
-            echo_green "Added ${OLLAMA_BASE_URL_VAR} to ${ENV_FILE}."
-        fi
-        if ! grep -q "^${WEBUI_UID_VAR}=" "${ENV_FILE}"; then
-            printf "%s=%s\n" "${WEBUI_UID_VAR}" "${host_uid}" >> "${ENV_FILE}"
-            echo_green "Added ${WEBUI_UID_VAR}=${host_uid} to ${ENV_FILE}."
-        fi
-        if ! grep -q "^${WEBUI_GID_VAR}=" "${ENV_FILE}"; then
-            printf "%s=%s\n" "${WEBUI_GID_VAR}" "${host_gid}" >> "${ENV_FILE}"
-            echo_green "Added ${WEBUI_GID_VAR}=${host_gid} to ${ENV_FILE}."
-        fi
-        if ! grep -q "^${TOR_UID_VAR}=" "${ENV_FILE}"; then
-            printf "%s=%s\n" "${TOR_UID_VAR}" "${host_uid}" >> "${ENV_FILE}"
-            echo_green "Added ${TOR_UID_VAR}=${host_uid} to ${ENV_FILE}."
-        fi
-        if ! grep -q "^${TOR_GID_VAR}=" "${ENV_FILE}"; then
-            printf "%s=%s\n" "${TOR_GID_VAR}" "${host_gid}" >> "${ENV_FILE}"
-            echo_green "Added ${TOR_GID_VAR}=${host_gid} to ${ENV_FILE}."
-        fi
-    else
-        local secret_key
-        secret_key=$(openssl rand -hex 32)
-        cat > "${ENV_FILE}" <<EOF
-${SECRET_KEY_VAR}=${secret_key}
-${OLLAMA_BASE_URL_VAR}=http://ollama-proxy:11434
-${WEBUI_UID_VAR}=${host_uid}
-${WEBUI_GID_VAR}=${host_gid}
-${TOR_UID_VAR}=${host_uid}
-${TOR_GID_VAR}=${host_gid}
-EOF
-        export "${SECRET_KEY_VAR}=${secret_key}"
-        new_key_generated=true
-        echo_green "Generated ${SECRET_KEY_VAR} and created ${ENV_FILE}."
-    fi
-
-    export "${WEBUI_UID_VAR}=$(grep "^${WEBUI_UID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-    export "${WEBUI_GID_VAR}=$(grep "^${WEBUI_GID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-    export "${TOR_UID_VAR}=$(grep "^${TOR_UID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-    export "${TOR_GID_VAR}=$(grep "^${TOR_GID_VAR}=" "${ENV_FILE}" | tail -n1 | cut -d'=' -f2-)"
-
-    if [ "${new_key_generated}" = true ]; then
-        echo_yellow "Important: A new WEBUI_SECRET_KEY has been generated. If you had existing Open-WebUI data, this might affect your session/login."
-    fi
-    echo_green "WebUI will run as UID:GID ${WEBUI_UID}:${WEBUI_GID}."
-    echo_green "Tor will run as UID:GID ${TOR_UID}:${TOR_GID}."
-    echo_green "${ENV_FILE} is configured."
-}
-
-# 3. Generate Certificates (ECDSA P-256 for Nginx with BoringSSL)
-generate_certs() {
-    echo_yellow "Handling certificates for Nginx (ECDSA P-256)..."
-    mkdir -p "${CERT_DIR}"
-    mkdir -p "${TOR_HS_DIR%/*}"
-    mkdir -p "${DATA_DIR}/open_webui_data"
-
-    if [ -f "${CERT_KEY_FILE}" ] && [ -f "${CERT_PEM_FILE}" ]; then
-        echo_green "Certificates (key.pem and cert.pem) already exist in ${CERT_DIR}. Skipping generation."
-        echo_yellow "To regenerate certificates, please remove them manually from ${CERT_DIR} and re-run this script."
-    else
-        echo_yellow "Generating ECDSA P-256 certificates..."
-        if ! docker image inspect alpine:3.23.3 &> /dev/null; then
-            echo_yellow "Pulling alpine:3.23.3 image (used for cert generation utility)..."
-            docker pull alpine:3.23.3
-        fi
-
-        # Use alpine and install openssl, then generate certs
-        docker run --rm -v "$(pwd)/${CERT_DIR#./}:/certs" \
-          alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 \
-          sh -c "apk add --no-cache openssl && \
-                 openssl req -x509 \
-                   -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
-                   -keyout /certs/key.pem \
-                   -out /certs/cert.pem \
-                   -nodes -days 3650 \
-                   -subj \"/CN=my-boringssl-onion-service\"" # Changed CN for clarity
-        
-        if [ -f "${CERT_KEY_FILE}" ] && [ -f "${CERT_PEM_FILE}" ]; then
-            echo_green "ECDSA P-256 certificates generated successfully in ${CERT_DIR}."
-        else
-            echo_red "Error: Certificate generation failed. Check Docker output and permissions."
-            exit 1
-        fi
-    fi
-}
-
-# --- Main Script ---
-echo_green "--- Welcome to the Open-WebUI with Tor & Post-Quantum TLS Setup ---"
-echo_yellow "This script will guide you through setting up your private and secure AI interface."
-echo ""
-
-check_docker
-echo ""
-setup_env_file
-echo ""
-generate_certs
-echo ""
-
-# 4. Run Docker Compose
-echo_yellow "Building and starting services with Docker Compose..."
-echo_yellow "This may take a while the first time if the base Nginx image needs pulling."
-if ${DOCKER_COMPOSE_CMD} up --build -d; then
-    echo_green "Docker Compose services started successfully."
-else
-    echo_red "Error: Docker Compose failed to start. Check the output above for details."
-    exit 1
+USE_COLOR=false
+if [[ -t 1 ]]; then
+  USE_COLOR=true
 fi
 
-echo ""
-echo_green "--- Setup Complete! ---"
+DOCKER_COMPOSE=()
 
-# Wait for Tor hidden service hostname file to appear, with a timeout
-MAX_WAIT_SECONDS=60
-WAIT_INTERVAL_SECONDS=5
-ELAPSED_SECONDS=0
-HOSTNAME_FILE="${TOR_HS_DIR}/hostname"
+print_color() {
+  local color="$1"
+  shift
+  if [[ "$USE_COLOR" == "true" ]]; then
+    printf "\033[%sm%s\033[0m\n" "$color" "$*"
+  else
+    printf "%s\n" "$*"
+  fi
+}
 
-echo_yellow "Waiting for Tor hidden service to publish (up to ${MAX_WAIT_SECONDS} seconds)..."
+log_info() {
+  print_color "0;33" "$*"
+}
 
-while [ ! -f "${HOSTNAME_FILE}" ] && [ "${ELAPSED_SECONDS}" -lt "${MAX_WAIT_SECONDS}" ]; do
-    sleep "${WAIT_INTERVAL_SECONDS}"
-    ELAPSED_SECONDS=$((ELAPSED_SECONDS + WAIT_INTERVAL_SECONDS))
-    echo_yellow "Still waiting for ${HOSTNAME_FILE} (${ELAPSED_SECONDS}s/${MAX_WAIT_SECONDS}s)..."
-done
+log_success() {
+  print_color "0;32" "$*"
+}
 
-if [ -f "${HOSTNAME_FILE}" ]; then
-    ONION_HOSTNAME=$(cat "${HOSTNAME_FILE}")
-    echo_green "Your Tor Hidden Service .onion address is: https://${ONION_HOSTNAME}"
-else
-    echo_red "Timeout: Tor hostname file (${HOSTNAME_FILE}) not found after ${MAX_WAIT_SECONDS} seconds."
-    echo_yellow "Please check the Tor service logs: ${DOCKER_COMPOSE_CMD} logs tor"
-    echo_yellow "You may need to wait longer or check for errors. The service might still be starting."
-fi
+log_error() {
+  print_color "0;31" "$*"
+}
 
-echo ""
-echo_yellow "Next steps to access your service:"
-echo "1. Open your .onion address in Tor Browser."
-echo "   - Tor Browser stable should connect without extra about:config flags."
-echo "   - The proxy prefers X25519MLKEM768, then X25519Kyber768Draft00."
-echo "   - Strict PQ-only mode: clients without those PQ hybrid groups will fail TLS handshake."
-echo "   - On iOS, there is no official Tor Browser; use Onion Browser."
-echo "2. If a self-signed certificate warning appears, verify/accept it and continue."
-echo ""
-echo_yellow "The services are now running in the background."
-echo_yellow "Press Ctrl+C or close this terminal to stop the services and perform cleanup."
-echo_yellow "Alternatively, you can manually stop them later with: ${DOCKER_COMPOSE_CMD} down"
-echo ""
+die() {
+  log_error "Error: $*"
+  exit 1
+}
 
-# Keep the script running until Ctrl+C is pressed, so the trap can execute
-# This can be a simple sleep loop or reading user input.
-# For simplicity, we'll just let the trap handle the exit.
-# If the script were to exit immediately, the 'trap EXIT' would fire.
-# By not exiting, we rely on Ctrl+C (SIGINT) or user closing the terminal (which often sends SIGHUP then SIGINT/SIGTERM)
-# or an explicit 'exit' command somewhere later if we added more logic.
-echo_yellow "Monitoring... (Script will keep running to allow cleanup on exit)"
-while true; do
-    sleep 86400 # Sleep for a day, effectively waiting for SIGINT
-done 
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./run.sh <command> [options]
+
+Commands:
+  init                  Prepare .env and certificates (idempotent)
+  up [--no-build]       Initialize if needed, then start stack in background
+  down                  Stop stack and remove containers/networks
+  status                Show compose service status
+  logs [args...]        Show compose logs (pass-through to docker compose logs)
+  onion [--wait] [--timeout SEC]
+                        Print onion hostname (optionally wait for it)
+  reset --force         Stop stack and delete Tor/WebUI data + TLS certs
+  fresh --force [--no-build]
+                        Reset data, reinitialize, then start stack
+  help                  Show this help
+
+Examples:
+  ./run.sh init
+  ./run.sh up
+  ./run.sh up --no-build
+  ./run.sh onion --wait --timeout 120
+  ./run.sh logs -f pq-proxy
+  ./run.sh reset --force
+  ./run.sh fresh --force
+USAGE
+}
+
+detect_docker_compose() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker-compose)
+  else
+    die "Neither 'docker compose' nor 'docker-compose' is available."
+  fi
+}
+
+require_docker_daemon() {
+  command -v docker >/dev/null 2>&1 || die "Docker CLI not found."
+  docker info >/dev/null 2>&1 || die "Docker daemon is not running or not reachable."
+  detect_docker_compose
+}
+
+compose() {
+  "${DOCKER_COMPOSE[@]}" "$@"
+}
+
+generate_secret_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    # Fallback if openssl is unavailable on host.
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+  fi
+}
+
+get_env_var() {
+  local key="$1"
+  local line
+
+  [[ -f "$ENV_FILE" ]] || return 1
+  line="$(grep -E "^${key}=" "$ENV_FILE" | tail -n1 || true)"
+  [[ -n "$line" ]] || return 1
+  printf "%s\n" "${line#*=}"
+}
+
+set_env_var() {
+  local key="$1"
+  local value="$2"
+  local tmp_file
+
+  tmp_file="$(mktemp)"
+  if [[ -f "$ENV_FILE" ]]; then
+    awk -v key="$key" -v value="$value" '
+      BEGIN { updated=0 }
+      $0 ~ ("^" key "=") {
+        if (!updated) {
+          print key "=" value
+          updated=1
+        }
+        next
+      }
+      { print }
+      END {
+        if (!updated) {
+          print key "=" value
+        }
+      }
+    ' "$ENV_FILE" > "$tmp_file"
+  else
+    printf "%s=%s\n" "$key" "$value" > "$tmp_file"
+  fi
+
+  mv "$tmp_file" "$ENV_FILE"
+}
+
+ensure_env_var() {
+  local key="$1"
+  local value="$2"
+
+  if [[ -z "$(get_env_var "$key" || true)" ]]; then
+    set_env_var "$key" "$value"
+    log_success "Added ${key} to ${ENV_FILE}."
+  fi
+}
+
+ensure_data_dirs() {
+  mkdir -p "$CERT_DIR" "$TOR_HS_DIR" "$OPENWEBUI_DATA_DIR"
+}
+
+ensure_env_file() {
+  local host_uid
+  local host_gid
+  local current_secret
+  local current_ollama
+
+  host_uid="$(id -u)"
+  host_gid="$(id -g)"
+
+  if [[ ! -f "$ENV_FILE" ]]; then
+    touch "$ENV_FILE"
+    log_success "Created ${ENV_FILE}."
+  fi
+
+  current_secret="$(get_env_var "$SECRET_KEY_VAR" || true)"
+  if [[ -z "$current_secret" ]]; then
+    set_env_var "$SECRET_KEY_VAR" "$(generate_secret_key)"
+    log_success "Generated ${SECRET_KEY_VAR} in ${ENV_FILE}."
+  fi
+
+  current_ollama="$(get_env_var "$OLLAMA_BASE_URL_VAR" || true)"
+  if [[ "$current_ollama" == "$LEGACY_OLLAMA_BASE_URL" ]]; then
+    set_env_var "$OLLAMA_BASE_URL_VAR" "$DEFAULT_OLLAMA_BASE_URL"
+    log_success "Migrated ${OLLAMA_BASE_URL_VAR} to ${DEFAULT_OLLAMA_BASE_URL}."
+  fi
+
+  ensure_env_var "$OLLAMA_BASE_URL_VAR" "$DEFAULT_OLLAMA_BASE_URL"
+  ensure_env_var "$WEBUI_UID_VAR" "$host_uid"
+  ensure_env_var "$WEBUI_GID_VAR" "$host_gid"
+  ensure_env_var "$TOR_UID_VAR" "$host_uid"
+  ensure_env_var "$TOR_GID_VAR" "$host_gid"
+
+  log_success "Using WEBUI UID:GID $(get_env_var "$WEBUI_UID_VAR"):$(get_env_var "$WEBUI_GID_VAR")."
+  log_success "Using TOR UID:GID $(get_env_var "$TOR_UID_VAR"):$(get_env_var "$TOR_GID_VAR")."
+}
+
+ensure_certs() {
+  ensure_data_dirs
+
+  if [[ -s "$CERT_KEY_FILE" && -s "$CERT_PEM_FILE" ]]; then
+    log_success "TLS certificates already exist in ${CERT_DIR}."
+  else
+    log_info "Generating ECDSA P-256 self-signed certificates..."
+    if ! docker image inspect "$CERT_TOOL_IMAGE_TAG" >/dev/null 2>&1; then
+      log_info "Pulling ${CERT_TOOL_IMAGE_TAG} helper image..."
+      docker pull "$CERT_TOOL_IMAGE_TAG" >/dev/null
+    fi
+
+    docker run --rm -v "${SCRIPT_DIR}/data/pq_proxy_certs:/certs" \
+      "$CERT_TOOL_IMAGE_DIGEST" \
+      sh -c "apk add --no-cache openssl >/dev/null && \
+             openssl req -x509 \
+               -newkey ec -pkeyopt ec_paramgen_curve:P-256 \
+               -keyout /certs/key.pem \
+               -out /certs/cert.pem \
+               -nodes -days 3650 \
+               -subj '/CN=my-boringssl-onion-service'"
+
+    [[ -s "$CERT_KEY_FILE" && -s "$CERT_PEM_FILE" ]] || die "Certificate generation failed."
+    log_success "TLS certificates generated in ${CERT_DIR}."
+  fi
+
+  # pq-proxy runs as non-root; mounted cert/key must be world-readable.
+  chmod 644 "$CERT_KEY_FILE" "$CERT_PEM_FILE"
+}
+
+wait_for_onion_hostname() {
+  local timeout="$1"
+  local interval=2
+  local elapsed=0
+  local hostname_file="${TOR_HS_DIR}/hostname"
+
+  while (( elapsed < timeout )); do
+    if [[ -s "$hostname_file" ]]; then
+      cat "$hostname_file"
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  return 1
+}
+
+show_access_hint() {
+  local onion
+
+  if onion="$(wait_for_onion_hostname 90)"; then
+    log_success "Tor hidden service: https://${onion}"
+  else
+    log_info "Tor hostname not ready yet. Check later with: ./run.sh onion --wait"
+  fi
+
+  printf "\n"
+  log_info "Access notes:"
+  printf "%s\n" "  - Open the onion URL in Tor Browser."
+  printf "%s\n" "  - Self-signed cert warning is expected in this setup."
+  printf "%s\n" "  - Strict PQ-only TLS policy is enforced at pq-proxy."
+}
+
+wipe_persistent_data() {
+  ensure_data_dirs
+
+  if [[ -d "$TOR_HS_DIR" ]]; then
+    find "$TOR_HS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  fi
+
+  if [[ -d "$OPENWEBUI_DATA_DIR" ]]; then
+    find "$OPENWEBUI_DATA_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  fi
+
+  rm -f "$CERT_KEY_FILE" "$CERT_PEM_FILE"
+}
+
+cmd_init() {
+  [[ $# -eq 0 ]] || die "init does not accept positional arguments."
+
+  require_docker_daemon
+  ensure_env_file
+  ensure_certs
+
+  log_success "Initialization complete."
+}
+
+cmd_up() {
+  local build=true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-build)
+        build=false
+        ;;
+      *)
+        die "Unknown option for up: $1"
+        ;;
+    esac
+    shift
+  done
+
+  require_docker_daemon
+  ensure_env_file
+  ensure_certs
+
+  if [[ "$build" == "true" ]]; then
+    log_info "Starting services with build..."
+    compose up --build -d
+  else
+    log_info "Starting services without build..."
+    compose up -d
+  fi
+
+  log_success "Stack started successfully."
+  show_access_hint
+}
+
+cmd_down() {
+  [[ $# -eq 0 ]] || die "down does not accept positional arguments."
+
+  require_docker_daemon
+  log_info "Stopping services..."
+  compose down --remove-orphans
+  log_success "Stack stopped."
+}
+
+cmd_status() {
+  [[ $# -eq 0 ]] || die "status does not accept positional arguments."
+
+  require_docker_daemon
+  compose ps
+}
+
+cmd_logs() {
+  require_docker_daemon
+  compose logs "$@"
+}
+
+cmd_onion() {
+  local wait=false
+  local timeout=60
+  local onion
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --wait)
+        wait=true
+        ;;
+      --timeout)
+        shift
+        [[ $# -gt 0 ]] || die "--timeout requires a value in seconds."
+        timeout="$1"
+        ;;
+      *)
+        die "Unknown option for onion: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [[ "$timeout" =~ ^[0-9]+$ ]] || die "timeout must be an integer (seconds)."
+
+  if onion="$(wait_for_onion_hostname 1)"; then
+    printf "%s\n" "$onion"
+    return 0
+  fi
+
+  if [[ "$wait" == "true" ]]; then
+    if onion="$(wait_for_onion_hostname "$timeout")"; then
+      printf "%s\n" "$onion"
+      return 0
+    fi
+    die "Timed out after ${timeout}s waiting for ${TOR_HS_DIR}/hostname"
+  fi
+
+  die "Onion hostname not found yet. Run './run.sh onion --wait' or check './run.sh status'."
+}
+
+cmd_reset() {
+  local force=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        force=true
+        ;;
+      *)
+        die "Unknown option for reset: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [[ "$force" == "true" ]] || die "reset is destructive and requires --force"
+
+  require_docker_daemon
+  log_info "Stopping services before reset..."
+  compose down --remove-orphans || true
+
+  log_info "Deleting Tor keys, WebUI data, and TLS certificates..."
+  wipe_persistent_data
+  log_success "Reset complete."
+}
+
+cmd_fresh() {
+  local force=false
+  local build=true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        force=true
+        ;;
+      --no-build)
+        build=false
+        ;;
+      *)
+        die "Unknown option for fresh: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [[ "$force" == "true" ]] || die "fresh is destructive and requires --force"
+
+  require_docker_daemon
+
+  log_info "Stopping existing stack..."
+  compose down --remove-orphans || true
+
+  log_info "Resetting persistent data..."
+  wipe_persistent_data
+
+  ensure_env_file
+  ensure_certs
+
+  if [[ "$build" == "true" ]]; then
+    log_info "Starting fresh stack with build..."
+    compose up --build -d
+  else
+    log_info "Starting fresh stack without build..."
+    compose up -d
+  fi
+
+  log_success "Fresh instance started successfully."
+  show_access_hint
+}
+
+main() {
+  local command="${1:-help}"
+
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  case "$command" in
+    init)
+      cmd_init "$@"
+      ;;
+    up|start)
+      cmd_up "$@"
+      ;;
+    down|stop)
+      cmd_down "$@"
+      ;;
+    status|ps)
+      cmd_status "$@"
+      ;;
+    logs)
+      cmd_logs "$@"
+      ;;
+    onion)
+      cmd_onion "$@"
+      ;;
+    reset)
+      cmd_reset "$@"
+      ;;
+    fresh)
+      cmd_fresh "$@"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage
+      die "Unknown command: ${command}"
+      ;;
+  esac
+}
+
+main "$@"

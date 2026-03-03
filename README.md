@@ -130,20 +130,22 @@ If you need to integrate proprietary LLM endpoints while preserving privacy and 
 
 ### Quick Start
 
-This project includes a `run.sh` script to automate setup. Simply run:
+This project includes a `run.sh` CLI to automate setup and lifecycle management:
 ```bash
 chmod +x run.sh
-./run.sh
+./run.sh init
+./run.sh up
+./run.sh onion --wait --timeout 120
 ```
-This script will:
+The commands above will:
 1. Check for Docker.
 2. Set up `WEBUI_SECRET_KEY`, `WEBUI_UID`, and `WEBUI_GID` in a `.env` file (generating missing values if needed).
    - It also sets `TOR_UID` and `TOR_GID` to your host UID/GID for Linux bind-mount compatibility.
-   - If an older `.env` uses `OLLAMA_BASE_URL=http://host.docker.internal:11434`, the script migrates it to `http://ollama-proxy:11434`.
+   - If an older `.env` uses `OLLAMA_BASE_URL=http://host.docker.internal:11434`, the CLI migrates it to `http://ollama-proxy:11434`.
 3. Generate ECDSA P-256 self-signed certificates into `./data/pq_proxy_certs/` if not already present (these are used by Nginx/BoringSSL for the TLS handshake; key exchange is strict PQ-only: `X25519MLKEM768`, then `X25519Kyber768Draft00`).
 4. Build images as needed and start the Docker Compose services.
 
-Follow the on-screen instructions from the script. After it completes:
+`./run.sh up` exits after startup (it does not keep a foreground loop). After startup:
 
 1.  Wait ~30-60 seconds for Tor to bootstrap and publish the hidden service.
 2.  Retrieve your `.onion` address:
@@ -152,6 +154,25 @@ Follow the on-screen instructions from the script. After it completes:
     ```
 3.  Open the **`https://<your-onion-address>.onion`** URL in Tor Browser (stable is fine).
     - Note the `https://`. Your browser will likely warn about a self-signed certificate (the P-256 cert), which is expected in this setup.
+
+Common lifecycle commands:
+
+```bash
+# Show container/health status
+./run.sh status
+
+# Tail logs (all services)
+./run.sh logs -f
+
+# Stop services
+./run.sh down
+
+# Destructive reset (delete Tor keys, WebUI data, certs)
+./run.sh reset --force
+
+# Recreate a fully fresh instance in one step
+./run.sh fresh --force
+```
 
 ### Self-Signed TLS on Onion (Expected)
 
@@ -274,7 +295,7 @@ The repository includes a release workflow (`.github/workflows/release.yml`) tri
 
 4.  Start the services:
     ```bash
-    docker-compose up --build -d
+    docker compose up --build -d
     ```
 
 (Then follow steps for waiting, getting hostname, and accessing from the automated Quick Start above.)
@@ -297,15 +318,13 @@ All data folders are bind-mounted into the respective containers.
 
 To stop and remove containers (data and certificates persist locally in `./data/`):
 ```bash
-docker-compose down
+./run.sh down
 ```
 
 To remove generated data and certificates from the `./data/` directory:
 ```bash
 # WARNING: This will permanently delete your Tor keys, WebUI data, and certificates.
-rm -rf ./data/tor_hs_data/hs/* ./data/open_webui_data/* ./data/pq_proxy_certs/*.pem
-# To also remove the .gitkeep files if desired (though they are harmless):
-# rm ./data/tor_hs_data/hs/.gitkeep ./data/open_webui_data/.gitkeep ./data/pq_proxy_certs/.gitkeep
+./run.sh reset --force
 ```
 
 ---
