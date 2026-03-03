@@ -31,20 +31,17 @@ RUN --mount=type=cache,target=/var/cache/apk \
 ENV CFLAGS_BASE="-O3 -D_FORTIFY_SOURCE=2 -fstack-protector-strong -Wformat -Werror=format-security -fno-semantic-interposition" \
     LDFLAGS_BASE="-Wl,-z,relro,-z,now -fno-semantic-interposition"
 
-# BoringSSL git URL and commit
+# BoringSSL git URL and pinned commit.
+# Keep this pinned for reproducible builds and controlled TLS behavior.
 ENV BORINGSSL_GIT_URL=https://boringssl.googlesource.com/boringssl \
-    # https://boringssl.googlesource.com/boringssl/+/e6489902b7fb692875341b8ab5e57f0515f47bc1
-	# Last known commit to work with Nginx 1.28.0
-	# Wed Dec 06 22:08:40 2023
-	# Ultimately, when browsers fully support ML-KEM, we might want to switch to oqsprovider
-    BORINGSSL_COMMIT=e6489902b7fb692875341b8ab5e57f0515f47bc1
+    # https://boringssl.googlesource.com/boringssl/+/d0fcf49574b06de7090cba4ad8124df638a0134e
+    # Tue Mar 03 06:12:52 2026 -08:00
+    BORINGSSL_COMMIT=d0fcf49574b06de7090cba4ad8124df638a0134e
 
 # Clone and build BoringSSL with security hardening flags
 RUN git clone $BORINGSSL_GIT_URL /usr/src/boringssl \
 		&& cd /usr/src/boringssl \
 		&& git checkout --force --quiet $BORINGSSL_COMMIT \
-		&& (grep -qxF 'SET_TARGET_PROPERTIES(crypto PROPERTIES SOVERSION 1)' /usr/src/boringssl/crypto/CMakeLists.txt || echo -e '\nSET_TARGET_PROPERTIES(crypto PROPERTIES SOVERSION 1)' >> /usr/src/boringssl/crypto/CMakeLists.txt) \
-		&& (grep -qxF 'SET_TARGET_PROPERTIES(ssl PROPERTIES SOVERSION 1)' /usr/src/boringssl/ssl/CMakeLists.txt || echo -e '\nSET_TARGET_PROPERTIES(ssl PROPERTIES SOVERSION 1)' >> /usr/src/boringssl/ssl/CMakeLists.txt) \
 		&& mkdir -p /usr/src/boringssl/build \
 		&& if [ "$TARGETARCH" = "arm64" ]; then ARCH_FLAGS="-march=armv8-a -mno-outline-atomics"; else ARCH_FLAGS="-march=x86-64"; fi \
 		&& cmake -B/usr/src/boringssl/build -S/usr/src/boringssl \
@@ -144,9 +141,10 @@ RUN git clone --depth=1 --recurse-submodules $NGINX_BROTLI_GIT_URL /usr/src/ngx_
 
 # Build and install optimized release version of Nginx with security hardening
 RUN cd /usr/src/nginx-$NGINX_VERSION \
-	&& patch -p1 < dynamic_tls_records.patch \
-	&& if [ "$TARGETARCH" = "arm64" ]; then ARCH_FLAGS="-march=armv8-a -mno-outline-atomics"; else ARCH_FLAGS="-march=x86-64"; fi \
-	&& CONFIG="\
+		&& patch -p1 < dynamic_tls_records.patch \
+		&& sed -i 's/-lssl -lcrypto/-lssl -lcrypto -lstdc++/g' auto/lib/openssl/conf \
+		&& if [ "$TARGETARCH" = "arm64" ]; then ARCH_FLAGS="-march=armv8-a -mno-outline-atomics"; else ARCH_FLAGS="-march=x86-64"; fi \
+		&& CONFIG="\
 		--prefix=/etc/nginx \
 		--sbin-path=/usr/sbin/nginx \
 		--modules-path=/usr/lib/nginx/modules \
@@ -193,11 +191,11 @@ RUN cd /usr/src/nginx-$NGINX_VERSION \
 		--with-http_v2_module \
 		--with-http_v3_module \
 		--add-dynamic-module=/usr/src/ngx_brotli \
-	" \
-	&& ./configure $CONFIG \
-		--with-cc-opt="-I/usr/src/boringssl/include $CFLAGS_BASE $ARCH_FLAGS" \
-		--with-ld-opt="-L/usr/src/boringssl/build/ssl -L/usr/src/boringssl/build/crypto $LDFLAGS_BASE" \
-	&& make -j$(getconf _NPROCESSORS_ONLN) \
+		" \
+		&& ./configure $CONFIG \
+			--with-cc-opt="-I/usr/src/boringssl/include $CFLAGS_BASE $ARCH_FLAGS" \
+			--with-ld-opt="-L/usr/src/boringssl/build -L/usr/src/boringssl/build/ssl -L/usr/src/boringssl/build/crypto $LDFLAGS_BASE" \
+		&& make -j$(getconf _NPROCESSORS_ONLN) \
 	&& make install \
 	&& rm -rf /etc/nginx/html/ \
 	&& mkdir -p /etc/nginx/conf.d/ \
@@ -213,8 +211,9 @@ RUN cd /usr/src/nginx-$NGINX_VERSION \
 # Runtime stage - minimal image with only what's needed to run Nginx
 FROM alpine@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c AS runner
 
-# Install minimal runtime dependencies
-RUN apk add --no-cache tzdata ca-certificates pcre brotli
+# Install minimal runtime dependencies.
+# libstdc++/libgcc are required by newer BoringSSL static archives linked into nginx.
+RUN apk add --no-cache tzdata ca-certificates pcre brotli libstdc++ libgcc
 
 # Copy only the necessary files from the builder stage
 COPY --from=nginx-builder /usr/sbin/nginx /usr/sbin/nginx
