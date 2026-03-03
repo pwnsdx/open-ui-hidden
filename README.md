@@ -1,9 +1,9 @@
 # Open-WebUI with Tor Hidden Service & Post-Quantum TLS (BoringSSL Edition)
 
-This project runs the Open-WebUI AI interface behind a Tor hidden service, with an additional layer of post-quantum (PQ) encryption using the **X25519Kyber768Draft00** hybrid key exchange for TLS termination. It uses Docker Compose to manage four containers:
+This project runs the Open-WebUI AI interface behind a Tor hidden service, with an additional TLS layer on top of Tor. The proxy prefers the experimental **X25519Kyber768Draft00** hybrid key exchange when available and falls back to **X25519** for compatibility. It uses Docker Compose to manage four containers:
 
 - **tor-hs**: A minimal Alpine container running Tor, configured to expose the WebUI's PQ proxy via a `.onion` address on port 443 (HTTPS).
-- **pq-proxy**: An Nginx container built from scratch It acts as a reverse proxy, listening for HTTPS traffic from Tor, terminating TLS using **X25519Kyber768Draft00** (a hybrid scheme supported by BoringSSL and some browsers like Tor Browser), and forwards traffic to the Open-WebUI container.
+- **pq-proxy**: An Nginx container built from scratch. It acts as a reverse proxy, listening for HTTPS traffic from Tor, terminating TLS with preferred **X25519Kyber768Draft00** and fallback **X25519**, then forwarding traffic to the Open-WebUI container.
 - **ollama-proxy**: An internal Nginx proxy that exposes your host Ollama endpoint to Open-WebUI on a private Docker network only.
 - **open-webui**: The upstream Open-WebUI container serving the AI interface internally on port 8080. Wrapped with proxychains4 so that outbound HTTP/TCP traffic (except internal local routes such as Ollama proxy traffic) is routed through Tor's SOCKS proxy.
 
@@ -12,7 +12,7 @@ All persistent user data (Tor keys, WebUI database/cache) and generated certific
 ### TL;DR
 
 - You get a self-hosted Open-WebUI reachable over a Tor `.onion` address.
-- TLS is terminated on an internal PQ-capable Nginx proxy (`X25519Kyber768Draft00`, experimental).
+- TLS is terminated on an internal BoringSSL Nginx proxy that prefers `X25519Kyber768Draft00` (experimental) and falls back to `X25519`.
 - WebUI outbound traffic is routed through Tor via proxychains, while local Ollama traffic stays on Docker-internal DNS (`ollama-proxy`).
 - Containers are isolated, non-root where possible, and now include healthchecks for better startup reliability.
 
@@ -22,7 +22,7 @@ All persistent user data (Tor keys, WebUI database/cache) and generated certific
 | :--- | :--- | :--- |
 | Hide service location from direct internet scans | Yes | Exposed only as Tor hidden service. |
 | Reduce metadata leakage for outbound model calls | Yes (partial) | Proxychains routes outbound TCP via Tor; local/internal destinations are exempted. |
-| Add an additional PQ-hybrid TLS layer | Yes (experimental) | Uses `X25519Kyber768Draft00`; browser/server support may vary. |
+| Add an additional PQ-hybrid TLS layer | Yes (experimental) | Prefers `X25519Kyber768Draft00` and falls back to `X25519`; browser/server support varies by build. |
 | Defend against host compromise | No | If host is compromised, container isolation is not enough. |
 | Defend against malicious browser endpoint | Partial | TLS/Tor help in transit, but endpoint compromise remains out of scope. |
 
@@ -40,13 +40,13 @@ flowchart LR
 
 ### Why Post-Quantum TLS for your Open-WebUI Onion Service?
 
-This project implements an additional layer of Post-Quantum (PQ) TLS using X25519Kyber768Draft00 on top of Tor's existing protections. The primary motivation is to ensure **forward secrecy against future quantum adversaries.**
+This project implements an additional TLS layer on top of Tor's existing protections. In this build, the proxy prefers the draft hybrid group `X25519Kyber768Draft00` and can fall back to `X25519`. The primary motivation is to improve **forward secrecy against future quantum adversaries** while keeping broad client reachability.
 
 Currently, while Tor provides strong anonymity and encryption, the underlying cryptographic algorithms used for its onion routing are not yet standardized to be quantum-resistant. If encrypted Tor traffic were to be intercepted and stored today, a sufficiently powerful quantum computer in the future could potentially decrypt it.
 
-By adding a X25519Kyber768Draft00 TLS layer at the edge (terminated by our `pq-proxy`):
+By adding this TLS layer at the edge (terminated by `pq-proxy`):
 -   **Enhanced Confidentiality for AI Conversations**: Sensitive data, such as your interactions with your local AIs, gains an extra layer of protection designed to resist decryption even by future quantum computers.
--   **True End-to-End Encryption (E2EE) in a Post-Quantum Context**: When you connect to your `.onion` service using a browser supporting X25519Kyber768Draft00 (like Tor Browser Alpha with the appropriate flag enabled), the TLS session between your browser and the `pq-proxy` uses this hybrid post-quantum key exchange. This means the traffic, even if it transits the Tor network, is enveloped in a PQ-hybrid-secure tunnel.
+-   **Post-Quantum Hybrid When Available, Safe Fallback Otherwise**: If your browser supports `X25519Kyber768Draft00`, the TLS session with `pq-proxy` uses the hybrid group. If not, it falls back to `X25519`, so access still works without requiring special browser flags.
 
 This setup provides a robust defense-in-depth strategy, aiming to protect your Open-WebUI communications against passive attackers of today and tomorrow.
 
@@ -67,7 +67,7 @@ Using a Tor Hidden Service (`.onion` service) as the access point for your Open-
 
 **Overall Synergy for Private, Secure, and Anonymous LLM Access:**
 
-The combination of a Tor Hidden Service, a Post-Quantum TLS proxy (using BoringSSL and X25519Kyber768Draft00), and Open-WebUI (with a local LLM like Ollama) creates a powerful, synergistic setup. It offers a pathway to:
+The combination of a Tor Hidden Service, a TLS proxy (using BoringSSL with preferred `X25519Kyber768Draft00` and fallback `X25519`), and Open-WebUI (with a local LLM like Ollama) creates a powerful, synergistic setup. It offers a pathway to:
 -   **True End-to-End Security**: From your PQ-capable browser to the PQ proxy, with Tor's onion routing in between.
 -   **Privacy and Anonymity**: Leveraging Tor's inherent capabilities.
 -   **Self-Hosted Control**: Keeping your data and AI interactions on your own hardware.
@@ -81,7 +81,7 @@ This architecture aims to provide a comprehensive solution for individuals seeki
 | :-------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Open-WebUI Access**                       | Access the Open-WebUI AI interface.                                                                                                          |
 | **Tor Hidden Service**                      | Exposes the WebUI via a `.onion` address for direct, secure access without port forwarding.                                                  |
-| **Post-Quantum TLS**                        | Uses **X25519Kyber768Draft00** hybrid key exchange for TLS termination, providing forward secrecy against future quantum adversaries.          |
+| **Post-Quantum TLS (Opportunistic)**       | Prefers **X25519Kyber768Draft00** hybrid key exchange for TLS termination and falls back to **X25519** when needed.                            |
 | **Dockerized Setup**                        | Manages Tor, Nginx (PQ Proxy), and Open-WebUI in separate Docker containers for isolation and ease of deployment.                            |
 | **Anonymized Outbound Traffic**               | Routes Open-WebUI's outbound HTTP/TCP traffic (e.g., remote LLM API calls) through Tor's SOCKS proxy.                                        |
 | **Data Persistence**                        | Stores Tor keys, WebUI database/cache, and generated certificates locally in a `./data/` directory.                                          |
@@ -96,11 +96,11 @@ This architecture aims to provide a comprehensive solution for individuals seeki
 
 | Security Aspect                                     | Status                 | Details                                                                                               |
 | :-------------------------------------------------- | :--------------------- | :---------------------------------------------------------------------------------------------------- |
-| **Protection against passive quantum attackers**    | Yes                    | Achieved via the `pq-proxy` terminating TLS with X25519Kyber768Draft00.                               |
+| **Protection against passive quantum attackers**    | Partial/Experimental   | Achieved when the negotiated group is `X25519Kyber768Draft00`; otherwise connection uses `X25519`.    |
 | **Protection in case of Tor container compromise**  | Yes                    | Achieved via separation of concerns; `pq-proxy` (handling plaintext) is in a separate container.       |
 | **Standard Tor Network Protections**                | Yes                    | Inherits anonymity and encryption benefits from Tor's onion routing.                                    |
 | **Protection against active quantum attackers**     | Partial/Experimental   | Dependent on browser and server support for PQ algorithms; focuses on forward secrecy for stored data. |
-| **End-to-End Encryption (Browser to PQ Proxy)**   | Yes (PQ Hybrid)        | When using a compatible browser (e.g., Tor Browser Alpha with Kyber enabled).                           |
+| **End-to-End Encryption (Browser to PQ Proxy)**   | Yes                    | Always TLS; PQ-hybrid is opportunistic and depends on negotiated group support.                        |
 
 ### Privacy-Preserving Proprietary Communications
 If you need to integrate proprietary LLM endpoints while preserving privacy and anonymity, we recommend using [OpenRouter](https://openrouter.ai/) with crypto-based payments. OpenRouter acts as a neutral middleware supporting various proprietary models, and by paying with cryptocurrencies, you avoid linking your identity or billing information. Combined with our Tor proxy setup, this enables more private, end-to-end encrypted interactions even with closed-source AI services.
@@ -109,11 +109,18 @@ If you need to integrate proprietary LLM endpoints while preserving privacy and 
 
 - Docker Engine
 - Docker Compose plugin or standalone `docker-compose`
-- **A Tor Browser capable of using the X25519Kyber768Draft00 hybrid key exchange.**
-    - As of late 2023/early 2024, **Tor Browser Alpha** versions support this via a flag.
-    - In Tor Browser Alpha, navigate to `about:config` and set `security.tls.enable_kyber` to `true` (this flag enables Kyber support which includes this hybrid KEM).
-    - Standard Tor Browser versions may not support this yet.
+- **A recent Tor-capable browser.**
+    - Tor Browser stable is recommended.
+    - No manual `about:config` flag is required for basic connectivity.
+    - On iOS, there is no official Tor Browser app; use Onion Browser.
 - **OpenSSL command-line tool** (standard version is fine) for generating the `WEBUI_SECRET_KEY` and for the certificate generation step if done manually (though `run.sh` uses a Docker image for certs).
+
+### Browser Compatibility (As of 2026-03-03)
+
+- Tor Browser stable `15.0.7` is based on Firefox `140.8.0esr` ([source](https://blog.torproject.org/new-release-tor-browser-1507/)).
+- This repository currently pins BoringSSL to commit `e6489902` (Dec 2023), which in practice supports `X25519Kyber768Draft00` but not the newer `X25519MLKEM768` name.
+- Because of that, `pq-proxy` is configured to prefer `X25519Kyber768Draft00` and fall back to `X25519`.
+- Result: service remains reachable from modern Tor-capable browsers; PQ-hybrid is used opportunistically based on negotiation support.
 
 ### Quick Start
 
@@ -126,7 +133,7 @@ This script will:
 1. Check for Docker.
 2. Set up `WEBUI_SECRET_KEY`, `WEBUI_UID`, and `WEBUI_GID` in a `.env` file (generating missing values if needed).
    - If an older `.env` uses `OLLAMA_BASE_URL=http://host.docker.internal:11434`, the script migrates it to `http://ollama-proxy:11434`.
-3. Generate ECDSA P-256 self-signed certificates into `./data/pq_proxy_certs/` if not already present (these are used by Nginx/BoringSSL for the TLS handshake, while X25519Kyber768Draft00 is used for the key exchange).
+3. Generate ECDSA P-256 self-signed certificates into `./data/pq_proxy_certs/` if not already present (these are used by Nginx/BoringSSL for the TLS handshake; key exchange prefers `X25519Kyber768Draft00` with `X25519` fallback).
 4. Build images as needed and start the Docker Compose services.
 
 Follow the on-screen instructions from the script. After it completes:
@@ -136,8 +143,22 @@ Follow the on-screen instructions from the script. After it completes:
     ```bash
     cat ./data/tor_hs_data/hs/hostname
     ```
-3.  Open the **`https://<your-onion-address>.onion`** URL in your X25519Kyber768Draft00-enabled Tor Browser (e.g., Tor Browser Alpha with the `security.tls.enable_kyber` flag set to `true`).
-    - Note the `https://`. Your browser will likely warn about a self-signed certificate (the P-256 cert), which is expected. You'll need to accept the security exception.
+3.  Open the **`https://<your-onion-address>.onion`** URL in Tor Browser (stable is fine).
+    - Note the `https://`. Your browser will likely warn about a self-signed certificate (the P-256 cert), which is expected in this setup.
+
+### Self-Signed TLS on Onion (Expected)
+
+- On a `.onion` service, endpoint authenticity primarily comes from the onion address itself (derived from the hidden service key).
+- The self-signed TLS certificate here is an additional transport layer (with opportunistic PQ-hybrid key exchange), not the primary identity anchor.
+- A browser warning is therefore expected unless you manually trust/pin the certificate.
+
+If you want a manual check, print the server cert fingerprint locally:
+
+```bash
+openssl x509 -in ./data/pq_proxy_certs/cert.pem -noout -fingerprint -sha256
+```
+
+You can compare that SHA-256 fingerprint with what your browser shows for the TLS certificate.
 
 ### Verification Checklist
 
@@ -159,10 +180,11 @@ docker compose exec webui sh -lc 'echo "$OLLAMA_BASE_URL"'
 
 ### Known Limitations
 
-- `X25519Kyber768Draft00` is experimental and may break with browser/server updates.
+- `X25519Kyber768Draft00` is an experimental draft identifier and may break with browser/server updates.
+- The current pinned BoringSSL build does not expose `X25519MLKEM768`; moving to that name requires a BoringSSL bump and validation.
 - This setup does not replace endpoint security (host or browser compromise remains critical).
 - Tor adds latency and can affect UX for streaming/model responses.
-- TLS certificate is self-signed by default, so client trust prompts are expected.
+- TLS certificate is self-signed by default; client trust prompts are expected and normal for this onion-focused model.
 
 **Manual Steps (if not using `run.sh`):**
 
@@ -252,4 +274,4 @@ Keeping Tor and Nginx in separate containers is a deliberate security measure ba
 
 While merging might offer slight conveniences in terms of management or a tiny reduction in resource overhead, these are generally outweighed by the significant security benefits of isolation. In scenarios involving proxying and anonymization, prioritizing security through separation is the recommended path.
 
-Enjoy your self-hosted AI WebUI accessible over Tor with X25519Kyber768Draft00 post-quantum hybrid TLS!
+Enjoy your self-hosted AI WebUI accessible over Tor with opportunistic post-quantum hybrid TLS.
