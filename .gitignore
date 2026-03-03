@@ -1,0 +1,33 @@
+# Ignore runtime data in the data directory, except for .gitkeep files
+
+# Tor Hidden Service data
+/data/tor_hs_data/hs/*
+!/data/tor_hs_data/hs/.gitkeep
+# Other potential files/dirs in tor_hs_data root, but keep hs subdir
+/data/tor_hs_data/*
+!/data/tor_hs_data/hs/
+
+# Open-WebUI data
+/data/open_webui_data/*
+!/data/open_webui_data/.gitkeep
+
+# Generated certificates for PQ Proxy
+/data/pq_proxy_certs/*.pem
+/data/pq_proxy_certs/*.key
+!/data/pq_proxy_certs/.gitkeep
+
+# macOS specific files
+.DS_Store
+**/.DS_Store
+
+# Common log files
+*.log
+
+# Environment file (contains secrets)
+.env
+
+# IDE/Editor specific
+.vscode/
+.idea/
+*.swp
+*.swo

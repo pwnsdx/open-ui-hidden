@@ -1,0 +1,15 @@
+HiddenServiceDir /var/lib/tor/hs
+HiddenServiceVersion 3
+HiddenServicePort 443 pq-proxy:443
+RunAsDaemon 0
+Log notice stdout
+DataDirectory /var/lib/tor
+SafeLogging 1
+CircuitPriorityHalflife 30
+NumCPUs 4
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServiceEnableIntroDoSBurstPerSec 20
+HiddenServiceEnableIntroDoSRatePerSec 10
+HiddenServiceMaxStreams 30
+HiddenServiceMaxStreamsCloseCircuit 1
+SocksPort 0.0.0.0:9050

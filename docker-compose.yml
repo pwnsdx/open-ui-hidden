@@ -1,0 +1,118 @@
+services:
+  tor:
+    build:
+      context: ./docker/tor
+      dockerfile: Dockerfile
+    image: custom-tor-hs-alpine:latest
+    container_name: tor-hs-alpine
+    user: toruser # Run as non-root
+    read_only: true # Read-only root filesystem
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - ./data/tor_hs_data:/var/lib/tor:rw
+    restart: unless-stopped
+    networks:
+      - tor-public
+      - tor-internal
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+
+  ollama-proxy:
+    build:
+      context: ./docker/ollama-proxy
+      dockerfile: Dockerfile
+    image: ollama-proxy:latest
+    container_name: ollama-proxy
+    user: nginx # Run as non-root (nginx user from base image)
+    expose:
+      - "11434" # Expose port to webui-internal network
+    read_only: true # Read-only root filesystem
+    tmpfs:
+      - /var/cache/nginx:rw,mode=1777  # Nginx cache, world-writable
+      - /var/run:rw,mode=1777          # Nginx PID, world-writable
+      - /var/log/nginx:rw,mode=1777    # Nginx log directory, world-writable
+      - /var/tmp:rw,mode=1777          # General temporary files
+    restart: unless-stopped
+    networks:
+      webui-internal:
+        ipv4_address: 172.28.0.5 # Updated Static IP for ollama-proxy
+      ollama-access: # Network with access to host.docker.internal
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL # Drop all capabilities
+
+  webui:
+    build:
+      context: ./docker/webui
+    container_name: open-webui
+    depends_on:
+      - tor # Ensure Tor is started so the SOCKS proxy is available
+      - ollama-proxy # Ensure ollama-proxy is started
+    expose:
+      - "8080" # Expose port only to the internal Docker network
+    environment:
+      - OLLAMA_BASE_URL=http://172.28.0.5:11434 # Use the updated static IP of the proxy
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY} # Value loaded from .env file by docker-compose
+      - NO_PROXY=ollama-proxy,127.0.0.1,localhost,172.28.0.5 # Add updated static IP to NO_PROXY
+    read_only: true # Read-only root filesystem
+    tmpfs:
+      - /tmp # For any temporary files uvicorn/open-webui might need
+      - /app/backend/open_webui/static # For static assets Open-WebUI might try to write/create
+    volumes:
+      - ./data/open_webui_data:/app/backend/data:rw # Writable volume for app data
+    restart: unless-stopped
+    networks:
+      - webui-internal
+      - tor-internal
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL # Drop all capabilities
+
+  pq-proxy:
+    build:
+      context: ./docker/pq-proxy
+      dockerfile: Dockerfile
+    image: pq-nginx-kyber768:latest
+    container_name: pq-nginx-proxy-kyber768
+    user: nginx # Run as non-root
+    depends_on:
+      - webui # Ensures webui is started before the proxy attempts to send traffic to it
+    expose:
+      - "443" # Expose port only to the internal Docker network (Tor will access it)
+    read_only: true # Read-only root filesystem
+    tmpfs:
+      - /var/cache/nginx:rw,mode=1777  # Nginx cache, world-writable
+      - /var/run:rw,mode=1777          # Nginx PID, world-writable
+      - /var/log/nginx:rw,mode=1777    # Nginx log directory, world-writable
+      - /var/tmp:rw,mode=1777          # General temporary files
+    volumes:
+      - ./data/pq_proxy_certs:/etc/nginx/ssl:ro # Read-only certs
+    restart: unless-stopped
+    networks:
+      - tor-internal
+      - webui-internal
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL # Drop all capabilities
+
+networks:
+  tor-public:
+    driver: bridge
+  tor-internal:
+    driver: bridge
+    internal: true
+  webui-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24 # Updated subnet
+  ollama-access:
+    driver: bridge

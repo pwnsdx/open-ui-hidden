@@ -1,0 +1,14 @@
+# Exclude everything by default
+**
+
+# Allow the Dockerfile
+!Dockerfile
+
+# Allow nginx configuration
+!nginx.conf
+
+# Allow HTML content directory
+!html/**
+
+# Allow patch files
+!nginx__dynamic_tls_records_1.27.5+.patch 
