@@ -14,9 +14,9 @@ services:
       - 0.0.0.0
     command: []
     environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama-proxy:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://172.30.10.10:11434}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-      - NO_PROXY=ollama-proxy,127.0.0.1,localhost
+      - NO_PROXY=172.30.10.10,172.30.10.30,ollama-proxy,pq-proxy,127.0.0.1,localhost
       - PYTHONDONTWRITEBYTECODE=1
     volumes: []
     read_only: true

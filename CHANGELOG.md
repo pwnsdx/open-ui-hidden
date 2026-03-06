@@ -15,11 +15,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `CHANGELOG.md`.
 - Maintenance helper script and Makefile targets to check or refresh pinned
   upstream image digests in place.
+- `webui-fw` firewall sidecar that owns the WebUI network namespace and
+  enforces a default-drop outbound TCP policy with explicit local allow-rules.
 
 ### Changed
 
 - Tor container build now installs the `tor` package without pinning an exact
   Alpine patch revision to avoid CI breakage when package indexes rotate.
+- Critical internal WebUI paths now use fixed internal IPv4 addresses to avoid
+  Docker IPv6 resolution surprises inside the shared firewall namespace.
 
 ## [0.1.0] - 2026-03-03
 

@@ -38,7 +38,7 @@ HOST_GID="$(id -g)"
 
 cat >"$ENV_FILE" <<EOF
 WEBUI_SECRET_KEY=ci_secret_key_for_tests_only
-OLLAMA_BASE_URL=http://ollama-proxy:11434
+OLLAMA_BASE_URL=http://172.30.10.10:11434
 WEBUI_UID=${HOST_UID}
 WEBUI_GID=${HOST_GID}
 TOR_UID=${HOST_UID}
@@ -63,8 +63,8 @@ chmod 644 ./data/pq_proxy_certs/cert.pem ./data/pq_proxy_certs/key.pem
 if docker ps --format '{{.Names}}' | grep -qx 'pq-nginx-proxy-kyber768'; then
   echo "[smoke] reusing existing running stack"
 else
-  echo "[smoke] building tor/tor-http-proxy/ollama-proxy/pq-proxy images"
-  "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" build tor tor-http-proxy ollama-proxy pq-proxy
+  echo "[smoke] building tor/tor-http-proxy/webui-fw/ollama-proxy/pq-proxy images"
+  "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" build tor tor-http-proxy webui-fw ollama-proxy pq-proxy
   echo "[smoke] pulling lightweight webui image"
   "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" pull webui
   echo "[smoke] starting docker compose stack"
@@ -104,6 +104,7 @@ echo "[smoke] waiting for services to become healthy"
 # Tor can stay "starting" for several minutes in cold CI runners.
 wait_health tor-hs-alpine 420
 wait_health tor-http-proxy 120
+wait_health open-webui-fw 120
 wait_health ollama-proxy 120
 wait_health open-webui 180
 wait_health pq-nginx-proxy-kyber768 180
@@ -111,6 +112,22 @@ wait_health pq-nginx-proxy-kyber768 180
 echo "[smoke] validating compose/service state"
 "${DOCKER_COMPOSE[@]}" ps
 "${DOCKER_COMPOSE[@]}" exec -T pq-proxy nginx -t
+
+echo "[smoke] checking webui network whitelist"
+"${DOCKER_COMPOSE[@]}" exec -T webui sh -lc \
+  "python3 -c \"import socket; s=socket.create_connection(('172.30.10.10', 11434), 3); s.close()\""
+"${DOCKER_COMPOSE[@]}" exec -T webui sh -lc \
+  "python3 -c \"import socket; s=socket.create_connection(('172.30.11.10', 8118), 3); s.close()\""
+
+set +e
+DIRECT_EGRESS_OUTPUT="$("${DOCKER_COMPOSE[@]}" exec -T webui sh -lc \
+  "python3 -c \"import socket; s=socket.create_connection(('1.1.1.1', 443), 3); s.close()\"" 2>&1)"
+DIRECT_EGRESS_RC=$?
+set -e
+echo "$DIRECT_EGRESS_OUTPUT"
+if [[ "$DIRECT_EGRESS_RC" -eq 0 ]]; then
+  fail "webui unexpectedly reached the public internet directly"
+fi
 
 echo "[smoke] checking pq-proxy build surface"
 NGINX_BUILD_INFO="$("${DOCKER_COMPOSE[@]}" exec -T pq-proxy nginx -V 2>&1)"
@@ -201,7 +218,7 @@ fi
 echo "[smoke] probing TLS policy: classical X25519 handshake must fail"
 set +e
 TLS_PROBE_OUTPUT="$("${DOCKER_COMPOSE[@]}" exec -T webui sh -lc \
-  "openssl s_client -connect pq-proxy:443 -servername pq-proxy -tls1_3 -groups X25519 -brief < /dev/null" 2>&1)"
+  "openssl s_client -connect 172.30.10.30:443 -servername pq-proxy -tls1_3 -groups X25519 -brief < /dev/null" 2>&1)"
 TLS_PROBE_RC=$?
 set -e
 

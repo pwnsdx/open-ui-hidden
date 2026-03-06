@@ -19,8 +19,9 @@ TOR_UID_VAR="TOR_UID"
 TOR_GID_VAR="TOR_GID"
 OLLAMA_BASE_URL_VAR="OLLAMA_BASE_URL"
 
-DEFAULT_OLLAMA_BASE_URL="http://ollama-proxy:11434"
+DEFAULT_OLLAMA_BASE_URL="http://172.30.10.10:11434"
 LEGACY_OLLAMA_BASE_URL="http://host.docker.internal:11434"
+LEGACY_INTERNAL_OLLAMA_BASE_URL="http://ollama-proxy:11434"
 CERT_TOOL_IMAGE_TAG="alpine:3.23.3"
 CERT_TOOL_IMAGE_DIGEST="alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
 
@@ -275,7 +276,7 @@ ensure_env_file() {
   fi
 
   current_ollama="$(get_env_var "$OLLAMA_BASE_URL_VAR" || true)"
-  if [[ "$current_ollama" == "$LEGACY_OLLAMA_BASE_URL" ]]; then
+  if [[ "$current_ollama" == "$LEGACY_OLLAMA_BASE_URL" || "$current_ollama" == "$LEGACY_INTERNAL_OLLAMA_BASE_URL" ]]; then
     set_env_var "$OLLAMA_BASE_URL_VAR" "$DEFAULT_OLLAMA_BASE_URL"
     log_success "Migrated ${OLLAMA_BASE_URL_VAR} to ${DEFAULT_OLLAMA_BASE_URL}."
   fi

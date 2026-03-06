@@ -28,6 +28,7 @@ assert_not_contains() {
 
 echo "[static] checking bash syntax"
 bash -n "$ROOT_DIR/run.sh"
+bash -n "$ROOT_DIR/docker/webui-fw/entrypoint.sh"
 bash -n "$ROOT_DIR/scripts/update-image-digests.sh"
 bash -n "$ROOT_DIR/tests/test_static.sh"
 bash -n "$ROOT_DIR/tests/test_compose_smoke.sh"
@@ -35,6 +36,7 @@ bash -n "$ROOT_DIR/tests/test_compose_smoke.sh"
 if command -v shellcheck >/dev/null 2>&1; then
   echo "[static] running shellcheck"
   shellcheck \
+    "$ROOT_DIR/docker/webui-fw/entrypoint.sh" \
     "$ROOT_DIR/run.sh" \
     "$ROOT_DIR/scripts/update-image-digests.sh" \
     "$ROOT_DIR/tests/test_static.sh" \
@@ -129,6 +131,14 @@ assert_contains \
   "$ROOT_DIR/scripts/update-image-digests.sh" \
   'python:3\.12-slim' \
   "update-image-digests.sh must track the pinned smoke-test image"
+assert_contains \
+  "$ROOT_DIR/run.sh" \
+  'DEFAULT_OLLAMA_BASE_URL="http://172\.30\.10\.10:11434"' \
+  "run.sh must default OLLAMA_BASE_URL to the fixed internal IPv4 address"
+assert_contains \
+  "$ROOT_DIR/.env.example" \
+  '^OLLAMA_BASE_URL=http://172\.30\.10\.10:11434$' \
+  ".env.example must document the fixed internal IPv4 default"
 
 echo "[static] checking Linux host gateway mapping for ollama-proxy"
 assert_contains \
@@ -145,16 +155,28 @@ assert_contains \
   "webui static tmpfs must be isolated and owned by the runtime user"
 assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
-  'HTTP_PROXY=http://tor-http-proxy:8118' \
-  "webui must route outbound HTTP through the dedicated tor-http-proxy sidecar"
+  'network_mode:[[:space:]]*"service:webui-fw"' \
+  "webui must share the dedicated firewall sidecar network namespace"
 assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
-  'HTTPS_PROXY=http://tor-http-proxy:8118' \
-  "webui must route outbound HTTPS through the dedicated tor-http-proxy sidecar"
+  'HTTP_PROXY=http://172\.30\.11\.10:8118' \
+  "webui must route outbound HTTP through the dedicated tor-http-proxy sidecar IPv4 address"
 assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
-  'ALL_PROXY=http://tor-http-proxy:8118' \
-  "webui must route generic proxy-aware traffic through the dedicated tor-http-proxy sidecar"
+  'HTTPS_PROXY=http://172\.30\.11\.10:8118' \
+  "webui must route outbound HTTPS through the dedicated tor-http-proxy sidecar IPv4 address"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'ALL_PROXY=http://172\.30\.11\.10:8118' \
+  "webui must route generic proxy-aware traffic through the dedicated tor-http-proxy sidecar IPv4 address"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'OLLAMA_BASE_URL=\$\{OLLAMA_BASE_URL:-http://172\.30\.10\.10:11434\}' \
+  "webui must default to the fixed internal ollama-proxy IPv4 address"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'NO_PROXY=172\.30\.10\.10,172\.30\.10\.30,ollama-proxy,pq-proxy,127\.0\.0\.1,localhost' \
+  "webui must keep fixed local IPv4 endpoints and service names out of the proxy path"
 assert_not_contains \
   "$ROOT_DIR/docker-compose.yml" \
   'ollama-proxy:127\.0\.0\.1' \
@@ -181,6 +203,14 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   'webui-egress' \
   "compose must define a dedicated egress network between webui and tor-http-proxy"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'subnet:[[:space:]]*172\.30\.10\.0/24' \
+  "webui-internal must use a fixed subnet for deterministic firewalling"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'subnet:[[:space:]]*172\.30\.11\.0/24' \
+  "webui-egress must use a fixed subnet for deterministic firewalling"
 assert_not_contains \
   "$ROOT_DIR/docker-compose.yml" \
   '^[[:space:]]*-[[:space:]]*tor-internal$|^[[:space:]]*tor-internal:' \
@@ -201,6 +231,14 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   'mem_limit:[[:space:]]*"\$\{WEBUI_MEM_LIMIT:-2g\}"' \
   "webui must set a default memory limit"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'cap_add:[[:space:]]*$' \
+  "compose must explicitly declare capabilities for the webui firewall sidecar"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'NET_ADMIN' \
+  "webui firewall sidecar must have NET_ADMIN to program iptables"
 
 echo "[static] checking tor entrypoint waits for pq-proxy DNS"
 assert_contains \
@@ -216,10 +254,18 @@ echo "[static] checking webui/tor dependency does not deadlock startup"
 if ! awk '
   $1 == "webui:" {in_webui=1; next}
   in_webui && /^[^[:space:]]/ {in_webui=0}
-  in_webui && $1 == "tor-http-proxy:" {found=1}
+  in_webui && $1 == "webui-fw:" {found=1}
   END {exit found ? 0 : 1}
 ' "$ROOT_DIR/docker-compose.yml"; then
-  fail "webui must depend on the dedicated tor-http-proxy sidecar"
+  fail "webui must depend on the dedicated firewall sidecar"
+fi
+if ! awk '
+  $1 == "webui-fw:" {in_fw=1; next}
+  in_fw && /^[^[:space:]]/ {in_fw=0}
+  in_fw && $1 == "tor-http-proxy:" {found=1}
+  END {exit found ? 0 : 1}
+' "$ROOT_DIR/docker-compose.yml"; then
+  fail "webui-fw must depend on the dedicated tor-http-proxy sidecar"
 fi
 if ! awk '
   $1 == "tor-http-proxy:" {in_proxy=1; next}
@@ -229,6 +275,20 @@ if ! awk '
 ' "$ROOT_DIR/docker-compose.yml"; then
   fail "tor-http-proxy must depend on tor service_started to avoid tor/pq-proxy startup deadlock"
 fi
+
+echo "[static] checking firewall sidecar policy"
+assert_contains \
+  "$ROOT_DIR/docker/webui-fw/entrypoint.sh" \
+  'iptables -P OUTPUT DROP' \
+  "webui-fw must default-drop outbound traffic"
+assert_contains \
+  "$ROOT_DIR/docker/webui-fw/entrypoint.sh" \
+  "iptables -A OUTPUT -p tcp -d \"\\\$TOR_HTTP_PROXY_IP\" --dport 8118 -j ACCEPT" \
+  "webui-fw must explicitly allow Tor HTTP proxy egress"
+assert_contains \
+  "$ROOT_DIR/docker/webui-fw/entrypoint.sh" \
+  "iptables -A OUTPUT -p tcp -d \"\\\$OLLAMA_PROXY_IP\" -m multiport --dports 11434,1234 -j ACCEPT" \
+  "webui-fw must explicitly allow local LLM backends"
 
 echo "[static] checking proxychains wrapper has been removed"
 assert_not_contains \
