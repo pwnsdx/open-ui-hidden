@@ -60,6 +60,18 @@ assert_not_contains \
   "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
   'pcre_jit[[:space:]]+on;' \
   "nginx.conf should not enable pcre_jit when regex modules are removed"
+assert_contains \
+  "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
+  'client_max_body_size[[:space:]]+25m;' \
+  "nginx.conf must cap request body size at the pq-proxy edge"
+assert_contains \
+  "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
+  'limit_conn_zone[[:space:]]+\$server_name[[:space:]]+zone=global_conn:1m;' \
+  "nginx.conf must enforce a global connection cap for the onion edge"
+assert_contains \
+  "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
+  'proxy_connect_timeout[[:space:]]+5s;' \
+  "nginx.conf must use strict upstream connect timeouts"
 
 echo "[static] checking tor package install is CI-safe"
 assert_not_contains \
@@ -116,12 +128,24 @@ assert_contains \
   "webui static tmpfs must be isolated and owned by the runtime user"
 assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
-  'ollama-proxy:127\.0\.0\.1' \
-  "webui must map ollama-proxy to loopback for proxychains-safe local calls"
+  'HTTP_PROXY=http://tor-http-proxy:8118' \
+  "webui must route outbound HTTP through the dedicated tor-http-proxy sidecar"
 assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
-  'ollama-upstream' \
-  "ollama-proxy service should expose a dedicated upstream alias for webui loopback forwarding"
+  'HTTPS_PROXY=http://tor-http-proxy:8118' \
+  "webui must route outbound HTTPS through the dedicated tor-http-proxy sidecar"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'ALL_PROXY=http://tor-http-proxy:8118' \
+  "webui must route generic proxy-aware traffic through the dedicated tor-http-proxy sidecar"
+assert_not_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'ollama-proxy:127\.0\.0\.1' \
+  "webui should not need loopback host overrides once proxychains is removed"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'tor-http-proxy' \
+  "compose must define a dedicated Tor HTTP proxy sidecar"
 
 echo "[static] checking tor service user mapping"
 assert_contains \
@@ -136,6 +160,10 @@ assert_contains \
   "$ROOT_DIR/docker-compose.yml" \
   'tor-socks-internal' \
   "compose must define a dedicated SOCKS network for Tor egress"
+assert_contains \
+  "$ROOT_DIR/docker-compose.yml" \
+  'webui-egress' \
+  "compose must define a dedicated egress network between webui and tor-http-proxy"
 assert_not_contains \
   "$ROOT_DIR/docker-compose.yml" \
   '^[[:space:]]*-[[:space:]]*tor-internal$|^[[:space:]]*tor-internal:' \
@@ -168,9 +196,30 @@ assert_contains \
   "tor entrypoint must wait for pq-proxy DNS before launching tor"
 
 echo "[static] checking webui/tor dependency does not deadlock startup"
-assert_contains \
-  "$ROOT_DIR/docker-compose.yml" \
-  'condition:[[:space:]]*service_started[[:space:]]*# Avoid startup deadlock with tor waiting on pq-proxy DNS' \
-  "webui must depend on tor service_started to avoid tor/pq-proxy startup deadlock"
+if ! awk '
+  $1 == "webui:" {in_webui=1; next}
+  in_webui && /^[^[:space:]]/ {in_webui=0}
+  in_webui && $1 == "tor-http-proxy:" {found=1}
+  END {exit found ? 0 : 1}
+' "$ROOT_DIR/docker-compose.yml"; then
+  fail "webui must depend on the dedicated tor-http-proxy sidecar"
+fi
+if ! awk '
+  $1 == "tor-http-proxy:" {in_proxy=1; next}
+  in_proxy && /^[^[:space:]]/ {in_proxy=0}
+  in_proxy && $1 == "tor:" {found=1}
+  END {exit found ? 0 : 1}
+' "$ROOT_DIR/docker-compose.yml"; then
+  fail "tor-http-proxy must depend on tor service_started to avoid tor/pq-proxy startup deadlock"
+fi
+
+echo "[static] checking proxychains wrapper has been removed"
+assert_not_contains \
+  "$ROOT_DIR/docker/webui/Dockerfile" \
+  'proxychains-ng|socat|ENTRYPOINT' \
+  "docker/webui/Dockerfile should not inject proxychains or a custom entrypoint anymore"
+if [[ -e "$ROOT_DIR/docker/webui/docker-entrypoint.sh" ]]; then
+  fail "docker/webui/docker-entrypoint.sh should be removed once proxychains is replaced"
+fi
 
 echo "[static] all checks passed"

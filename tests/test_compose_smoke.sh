@@ -63,8 +63,8 @@ chmod 644 ./data/pq_proxy_certs/cert.pem ./data/pq_proxy_certs/key.pem
 if docker ps --format '{{.Names}}' | grep -qx 'pq-nginx-proxy-kyber768'; then
   echo "[smoke] reusing existing running stack"
 else
-  echo "[smoke] building tor/ollama-proxy/pq-proxy images"
-  "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" build tor ollama-proxy pq-proxy
+  echo "[smoke] building tor/tor-http-proxy/ollama-proxy/pq-proxy images"
+  "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" build tor tor-http-proxy ollama-proxy pq-proxy
   echo "[smoke] pulling lightweight webui image"
   "${DOCKER_COMPOSE[@]}" --env-file "$ENV_FILE" pull webui
   echo "[smoke] starting docker compose stack"
@@ -103,6 +103,7 @@ wait_health() {
 echo "[smoke] waiting for services to become healthy"
 # Tor can stay "starting" for several minutes in cold CI runners.
 wait_health tor-hs-alpine 420
+wait_health tor-http-proxy 120
 wait_health ollama-proxy 120
 wait_health open-webui 180
 wait_health pq-nginx-proxy-kyber768 180
@@ -137,7 +138,6 @@ for required_flag in \
   '--without-http_scgi_module' \
   '--without-http_grpc_module' \
   '--without-http_memcached_module' \
-  '--without-http_limit_conn_module' \
   '--without-http_limit_req_module' \
   '--without-http_empty_gif_module' \
   '--without-http_browser_module' \
@@ -170,6 +170,7 @@ for unwanted_flag in \
   '--with-http_secure_link_module' \
   '--with-http_stub_status_module' \
   '--with-http_auth_request_module' \
+  '--with-http_limit_req_module' \
   '--with-pcre-jit' \
   '--with-threads' \
   '--with-stream' \

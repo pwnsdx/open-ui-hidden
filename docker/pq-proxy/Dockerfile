@@ -193,7 +193,6 @@ RUN cd /usr/src/nginx-$NGINX_VERSION \
 		--without-http_scgi_module \
 		--without-http_grpc_module \
 		--without-http_memcached_module \
-		--without-http_limit_conn_module \
 		--without-http_limit_req_module \
 		--without-http_empty_gif_module \
 		--without-http_browser_module \

@@ -59,8 +59,6 @@ services:
       start_period: 15s
     networks:
       webui-internal:
-        aliases:
-          - ollama-upstream # Dedicated DNS alias for local webui loopback forwarders
       ollama-access: # Network with access to host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -68,6 +66,39 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL # Drop all capabilities
+
+  tor-http-proxy:
+    build:
+      context: ./docker/tor-http-proxy
+      dockerfile: Dockerfile
+    image: tor-http-proxy:latest
+    container_name: tor-http-proxy
+    user: privoxy
+    pids_limit: ${TOR_HTTP_PROXY_PIDS_LIMIT:-64}
+    mem_limit: "${TOR_HTTP_PROXY_MEM_LIMIT:-64m}"
+    cpus: "${TOR_HTTP_PROXY_CPUS:-0.25}"
+    depends_on:
+      tor:
+        condition: service_started
+    expose:
+      - "8118"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=100,gid=101,mode=0700
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pidof privoxy >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - tor-socks-internal
+      - webui-egress
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
 
   webui:
     build:
@@ -78,16 +109,19 @@ services:
     mem_limit: "${WEBUI_MEM_LIMIT:-2g}"
     cpus: "${WEBUI_CPUS:-2.00}"
     depends_on:
-      tor:
-        condition: service_started # Avoid startup deadlock with tor waiting on pq-proxy DNS
       ollama-proxy:
         condition: service_healthy # Ensure the Ollama proxy is reachable
+      tor-http-proxy:
+        condition: service_healthy
     expose:
       - "8080" # Expose port only to the internal Docker network
     environment:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama-proxy:11434} # Use internal DNS by default
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY} # Value loaded from .env file by docker-compose
-      - NO_PROXY=ollama-proxy,ollama-upstream,127.0.0.1,localhost # Keep local traffic out of Tor proxychains path
+      - HTTP_PROXY=http://tor-http-proxy:8118
+      - HTTPS_PROXY=http://tor-http-proxy:8118
+      - ALL_PROXY=http://tor-http-proxy:8118
+      - NO_PROXY=ollama-proxy,127.0.0.1,localhost
     read_only: true # Read-only root filesystem
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,uid=${WEBUI_UID:-1000},gid=${WEBUI_GID:-1000},mode=0700
@@ -103,9 +137,7 @@ services:
       start_period: 40s
     networks:
       - webui-internal
-      - tor-socks-internal
-    extra_hosts:
-      - "ollama-proxy:127.0.0.1" # Force local loopback endpoint inside webui (forwarded to ollama-upstream)
+      - webui-egress
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -161,6 +193,9 @@ networks:
     driver: bridge
     internal: true
   webui-internal:
+    driver: bridge
+    internal: true
+  webui-egress:
     driver: bridge
     internal: true
   ollama-access:

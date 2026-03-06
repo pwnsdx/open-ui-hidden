@@ -1,0 +1,23 @@
+confdir /etc/privoxy
+logdir /tmp
+
+actionsfile match-all.action.new
+actionsfile default.action.new
+filterfile default.filter.new
+
+listen-address  0.0.0.0:8118
+toggle  1
+enable-remote-toggle 0
+enable-remote-http-toggle 0
+enable-edit-actions 0
+enforce-blocks 0
+accept-intercepted-requests 0
+allow-cgi-request-crunching 0
+split-large-forms 0
+keep-alive-timeout 10
+socket-timeout 30
+forwarded-connect-retries 1
+logfile privoxy.log
+
+# Route all outbound HTTP(S) requests through Tor with remote DNS.
+forward-socks5t / tor:9050 .
