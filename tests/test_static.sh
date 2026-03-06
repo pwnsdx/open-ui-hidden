@@ -71,7 +71,7 @@ assert_contains \
   "nginx.conf must cap request body size at the pq-proxy edge"
 assert_contains \
   "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
-  'limit_conn_zone[[:space:]]+\$server_name[[:space:]]+zone=global_conn:1m;' \
+  "limit_conn_zone[[:space:]]+\\\$server_name[[:space:]]+zone=global_conn:1m;" \
   "nginx.conf must enforce a global connection cap for the onion edge"
 assert_contains \
   "$ROOT_DIR/docker/pq-proxy/nginx.conf" \
